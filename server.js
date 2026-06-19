@@ -1,0 +1,170 @@
+const express = require('express');
+const cors = require('cors');
+const multer = require('multer');
+const { parse } = require('csv-parse');
+const fs = require('fs');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+
+const { fetchDomains } = require('./disposable');
+const { verifyEmail } = require('./verifier');
+const db = require('./db');
+
+const app = express();
+const upload = multer({ dest: 'uploads/' });
+
+app.use(cors());
+app.use(express.json());
+
+const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-123';
+
+// Load disposable domains at startup
+fetchDomains().then(() => {
+    console.log('Disposable domains loaded. Ready to verify.');
+});
+
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok' });
+});
+
+// --- Auth Endpoints ---
+
+app.post('/auth/register', (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+
+    bcrypt.hash(password, 10, (err, hash) => {
+        if (err) return res.status(500).json({ error: 'Server error' });
+        
+        db.run(`INSERT INTO users (email, password, credits) VALUES (?, ?, 100)`, [email, hash], function(err) {
+            if (err) {
+                if (err.message.includes('UNIQUE constraint failed')) {
+                    return res.status(400).json({ error: 'Email already exists' });
+                }
+                return res.status(500).json({ error: 'Database error' });
+            }
+            res.json({ success: true, message: 'User registered successfully', userId: this.lastID });
+        });
+    });
+});
+
+app.post('/auth/login', (req, res) => {
+    const { email, password } = req.body;
+    
+    db.get(`SELECT * FROM users WHERE email = ?`, [email], (err, user) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        if (!user) return res.status(400).json({ error: 'Invalid email or password' });
+
+        bcrypt.compare(password, user.password, (err, isMatch) => {
+            if (err) return res.status(500).json({ error: 'Server error' });
+            if (!isMatch) return res.status(400).json({ error: 'Invalid email or password' });
+
+            const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
+            res.json({ token, user: { id: user.id, email: user.email, credits: user.credits } });
+        });
+    });
+});
+
+function authenticateToken(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    
+    if (token == null) return res.status(401).json({ error: 'Unauthorized' });
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.status(403).json({ error: 'Forbidden' });
+        req.user = user;
+        next();
+    });
+}
+
+app.get('/auth/me', authenticateToken, (req, res) => {
+    db.get(`SELECT id, email, credits FROM users WHERE id = ?`, [req.user.id], (err, user) => {
+        if (err || !user) return res.status(404).json({ error: 'User not found' });
+        res.json(user);
+    });
+});
+
+function deductCredits(userId, amount) {
+    return new Promise((resolve, reject) => {
+        db.run(`UPDATE users SET credits = credits - ? WHERE id = ?`, [amount, userId], function(err) {
+            if (err) reject(err);
+            else resolve();
+        });
+    });
+}
+
+// --- Verification Endpoints (Protected) ---
+
+app.post('/verify', authenticateToken, async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+    
+    const result = await verifyEmail(email);
+    await deductCredits(req.user.id, 1);
+    
+    res.json(result);
+});
+
+async function asyncPool(poolLimit, array, iteratorFn) {
+    const ret = [];
+    const executing = [];
+    for (const item of array) {
+        const p = Promise.resolve().then(() => iteratorFn(item, array));
+        ret.push(p);
+        if (poolLimit <= array.length) {
+            const e = p.then(() => executing.splice(executing.indexOf(e), 1));
+            executing.push(e);
+            if (executing.length >= poolLimit) {
+                await Promise.race(executing);
+            }
+        }
+    }
+    return Promise.all(ret);
+}
+
+app.post('/verify/bulk', authenticateToken, async (req, res) => {
+    const { emails } = req.body;
+    if (!emails || !Array.isArray(emails)) {
+        return res.status(400).json({ error: 'Array of emails is required' });
+    }
+
+    const results = await asyncPool(5, emails, async (email) => {
+        return await verifyEmail(email);
+    });
+
+    await deductCredits(req.user.id, results.length);
+    res.json({ total: results.length, results });
+});
+
+app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
+
+    const emails = [];
+    fs.createReadStream(req.file.path)
+        .pipe(parse({ columns: true, skip_empty_lines: true }))
+        .on('data', (row) => {
+            const emailKey = Object.keys(row).find(k => k.toLowerCase().includes('email')) || Object.keys(row)[0];
+            if (emailKey && row[emailKey]) {
+                emails.push(row[emailKey].trim());
+            }
+        })
+        .on('end', async () => {
+            fs.unlinkSync(req.file.path);
+            
+            const results = await asyncPool(5, emails, async (email) => {
+                return await verifyEmail(email);
+            });
+
+            await deductCredits(req.user.id, results.length);
+            res.json({ total: results.length, results });
+        })
+        .on('error', (err) => {
+            res.status(500).json({ error: 'Failed to parse CSV' });
+        });
+});
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+    console.log(`Email Verifier API running on port ${PORT}`);
+});
