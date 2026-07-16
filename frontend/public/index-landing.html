@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BounceCure - Professional Email Verification</title>
+  <link rel="icon" type="image/svg+xml" href="/BounceCure logo design/bouncecure-icon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --primary: #4F46E5;
+      --primary-dark: #3730A3;
+      --primary-light: #EEF0FF;
+      --primary-mid: #C7C9FF;
+      --green: #10B981;
+      --green-light: #D1FAE5;
+      --dark: #0F0F1A;
+      --dark-2: #16161D;
+      --gray: #64748B;
+      --gray-light: #F8FAFC;
+      --border: #E2E8F0;
+      --white: #ffffff;
+    }
+
+    html { scroll-behavior: smooth; }
+    body { font-family: 'Inter', sans-serif; color: var(--dark-2); background: var(--white); overflow-x: hidden; }
+
+    /* ─── NAV ─── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1rem 5%; background: rgba(255,255,255,0.85);
+      backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);
+      transition: box-shadow 0.3s;
+    }
+    nav.scrolled { box-shadow: 0 4px 24px rgba(79,70,229,0.08); }
+    .nav-logo img { height: 36px; }
+    .nav-links { display: flex; gap: 2rem; list-style: none; }
+    .nav-links a { text-decoration: none; color: var(--gray); font-weight: 500; font-size: 0.95rem; transition: color 0.2s; }
+    .nav-links a:hover { color: var(--primary); }
+    .nav-cta { display: flex; gap: 0.75rem; align-items: center; }
+    .btn-outline { padding: 0.5rem 1.2rem; border: 1.5px solid var(--primary); color: var(--primary); background: transparent; border-radius: 8px; font-weight: 600; cursor: pointer; text-decoration: none; font-size: 0.9rem; transition: all 0.2s; }
+    .btn-outline:hover { background: var(--primary-light); }
+    .btn-primary-sm { padding: 0.5rem 1.2rem; background: var(--primary); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; text-decoration: none; font-size: 0.9rem; transition: all 0.2s; }
+    .btn-primary-sm:hover { background: var(--primary-dark); transform: translateY(-1px); }
+
+    /* ─── HERO ─── */
+    .hero {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center;
+      padding: 8rem 5% 5rem;
+      background: radial-gradient(ellipse 80% 60% at 50% -10%, #EEF0FF 0%, transparent 70%), var(--white);
+      position: relative; overflow: hidden;
+    }
+    .hero::before {
+      content: ''; position: absolute; inset: 0;
+      background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%234F46E5' fill-opacity='0.04'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+      pointer-events: none;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      background: var(--primary-light); color: var(--primary); padding: 0.35rem 1rem; border-radius: 99px;
+      font-size: 0.82rem; font-weight: 600; margin-bottom: 1.5rem; border: 1px solid var(--primary-mid);
+    }
+    .hero-badge span { width: 8px; height: 8px; background: var(--green); border-radius: 50%; display: inline-block; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(1.3)} }
+    .hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 900; line-height: 1.1; margin-bottom: 1.5rem; letter-spacing: -1.5px; }
+    .hero h1 .highlight { color: var(--primary); position: relative; }
+    .hero h1 .highlight::after { content: ''; position: absolute; bottom: 2px; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, var(--primary), var(--green)); border-radius: 2px; }
+    .hero p { font-size: 1.2rem; color: var(--gray); max-width: 580px; margin: 0 auto 2.5rem; line-height: 1.7; }
+    .hero-buttons { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; margin-bottom: 3rem; }
+    .btn-hero { padding: 0.9rem 2.2rem; border-radius: 10px; font-size: 1rem; font-weight: 700; cursor: pointer; text-decoration: none; transition: all 0.25s; display: inline-flex; align-items: center; gap: 0.5rem; }
+    .btn-hero-primary { background: var(--primary); color: white; border: none; box-shadow: 0 4px 20px rgba(79,70,229,0.35); }
+    .btn-hero-primary:hover { background: var(--primary-dark); transform: translateY(-2px); box-shadow: 0 8px 30px rgba(79,70,229,0.45); }
+    .btn-hero-secondary { background: white; color: var(--dark-2); border: 2px solid var(--border); }
+    .btn-hero-secondary:hover { border-color: var(--primary); color: var(--primary); transform: translateY(-2px); }
+    .hero-stats { display: flex; gap: 3rem; justify-content: center; flex-wrap: wrap; }
+    .hero-stat { text-align: center; }
+    .hero-stat-value { font-size: 1.8rem; font-weight: 800; color: var(--dark-2); }
+    .hero-stat-label { font-size: 0.82rem; color: var(--gray); margin-top: 0.2rem; }
+    .hero-demo {
+      margin-top: 4rem; background: white; border-radius: 16px; padding: 1.5rem 2rem;
+      box-shadow: 0 20px 60px rgba(79,70,229,0.12); border: 1px solid var(--border);
+      max-width: 580px; margin-left: auto; margin-right: auto; display: flex; gap: 0.75rem;
+    }
+    .hero-demo input { flex: 1; padding: 0.75rem 1rem; border: 1.5px solid var(--border); border-radius: 8px; font-size: 0.95rem; outline: none; font-family: 'Inter', sans-serif; transition: border-color 0.2s; }
+    .hero-demo input:focus { border-color: var(--primary); }
+    .hero-demo button { padding: 0.75rem 1.5rem; background: var(--primary); color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; transition: all 0.2s; white-space: nowrap; font-family: 'Inter', sans-serif; }
+    .hero-demo button:hover { background: var(--primary-dark); }
+
+    /* ─── SECTIONS COMMON ─── */
+    section { padding: 6rem 5%; }
+    .section-label { font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: var(--primary); margin-bottom: 0.75rem; }
+    .section-title { font-size: clamp(1.8rem, 4vw, 2.8rem); font-weight: 800; letter-spacing: -0.5px; margin-bottom: 1rem; }
+    .section-desc { font-size: 1.05rem; color: var(--gray); max-width: 560px; line-height: 1.7; }
+    .text-center { text-align: center; }
+    .text-center .section-desc { margin: 0 auto; }
+
+    /* ─── LOGOS / TRUSTED ─── */
+    .trusted { background: var(--gray-light); padding: 3rem 5%; text-align: center; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .trusted p { font-size: 0.85rem; color: var(--gray); font-weight: 500; margin-bottom: 2rem; text-transform: uppercase; letter-spacing: 1.5px; }
+    .trusted-logos { display: flex; gap: 3rem; justify-content: center; align-items: center; flex-wrap: wrap; }
+    .trusted-logo { font-size: 1.1rem; font-weight: 700; color: #CBD5E1; letter-spacing: -0.5px; }
+
+    /* ─── ABOUT ─── */
+    .about { background: white; }
+    .about-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5rem; align-items: center; max-width: 1100px; margin: 0 auto; }
+    .about-visual {
+      background: var(--primary-light); border-radius: 20px; padding: 3rem;
+      display: flex; align-items: center; justify-content: center; min-height: 360px;
+      position: relative; overflow: hidden;
+    }
+    .about-visual::before { content: ''; position: absolute; top: -40px; right: -40px; width: 200px; height: 200px; background: radial-gradient(circle, rgba(79,70,229,0.15) 0%, transparent 70%); border-radius: 50%; }
+    .flow-step { display: flex; align-items: center; gap: 1rem; background: white; padding: 1rem 1.5rem; border-radius: 12px; margin-bottom: 1rem; box-shadow: 0 4px 16px rgba(79,70,229,0.1); }
+    .flow-icon { width: 40px; height: 40px; background: var(--primary); border-radius: 10px; display: flex; align-items: center; justify-content: center; color: white; font-size: 1.1rem; flex-shrink: 0; }
+    .flow-icon.green { background: var(--green); }
+    .flow-text strong { font-size: 0.9rem; display: block; }
+    .flow-text span { font-size: 0.8rem; color: var(--gray); }
+    .about-points { list-style: none; display: flex; flex-direction: column; gap: 1.2rem; margin-top: 2rem; }
+    .about-points li { display: flex; align-items: flex-start; gap: 0.75rem; font-size: 0.95rem; color: var(--gray); line-height: 1.6; }
+    .check-icon { width: 22px; height: 22px; background: var(--green-light); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--green); font-size: 0.75rem; flex-shrink: 0; margin-top: 2px; }
+
+    /* ─── SERVICES ─── */
+    .services { background: var(--gray-light); }
+    .services-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-top: 3rem; max-width: 1100px; margin-left: auto; margin-right: auto; }
+    .service-card {
+      background: white; border-radius: 16px; padding: 2rem; border: 1px solid var(--border);
+      transition: all 0.3s; cursor: default;
+    }
+    .service-card:hover { transform: translateY(-6px); box-shadow: 0 20px 40px rgba(79,70,229,0.1); border-color: var(--primary-mid); }
+    .service-icon { width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; margin-bottom: 1.25rem; }
+    .service-card h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 0.6rem; }
+    .service-card p { font-size: 0.9rem; color: var(--gray); line-height: 1.6; }
+
+    /* ─── HOW IT WORKS ─── */
+    .how { background: white; }
+    .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 2rem; margin-top: 3.5rem; max-width: 1000px; margin-left: auto; margin-right: auto; position: relative; }
+    .steps::before { content: ''; position: absolute; top: 40px; left: 15%; right: 15%; height: 2px; background: linear-gradient(90deg, var(--primary-mid), var(--primary)); }
+    .step { text-align: center; position: relative; }
+    .step-num { width: 64px; height: 64px; border-radius: 50%; background: var(--primary); color: white; font-size: 1.4rem; font-weight: 800; display: flex; align-items: center; justify-content: center; margin: 0 auto 1.25rem; position: relative; z-index: 1; box-shadow: 0 8px 24px rgba(79,70,229,0.3); }
+    .step h3 { font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .step p { font-size: 0.88rem; color: var(--gray); line-height: 1.6; }
+
+    /* ─── PRICING ─── */
+    .pricing { background: var(--gray-light); }
+    .pricing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-top: 3rem; max-width: 960px; margin-left: auto; margin-right: auto; align-items: start; }
+    .pricing-card { background: white; border-radius: 20px; padding: 2.5rem; border: 1.5px solid var(--border); transition: all 0.3s; position: relative; }
+    .pricing-card:hover { transform: translateY(-4px); }
+    .pricing-card.popular { border-color: var(--primary); box-shadow: 0 12px 40px rgba(79,70,229,0.15); }
+    .popular-badge { position: absolute; top: -14px; left: 50%; transform: translateX(-50%); background: var(--primary); color: white; padding: 0.3rem 1.2rem; border-radius: 99px; font-size: 0.78rem; font-weight: 700; white-space: nowrap; }
+    .pricing-name { font-size: 1rem; font-weight: 700; color: var(--gray); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 1px; }
+    .pricing-price { font-size: 3rem; font-weight: 900; letter-spacing: -2px; }
+    .pricing-price sup { font-size: 1.2rem; font-weight: 700; vertical-align: top; margin-top: 0.7rem; display: inline-block; }
+    .pricing-price sub { font-size: 1rem; font-weight: 500; color: var(--gray); }
+    .pricing-credits { font-size: 0.9rem; color: var(--green); font-weight: 600; margin: 0.5rem 0 1.5rem; }
+    .pricing-features { list-style: none; display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 2rem; }
+    .pricing-features li { display: flex; align-items: center; gap: 0.6rem; font-size: 0.9rem; color: var(--gray); }
+    .pricing-features li::before { content: '✓'; color: var(--green); font-weight: 700; }
+    .btn-pricing { width: 100%; padding: 0.85rem; border-radius: 10px; font-size: 1rem; font-weight: 700; cursor: pointer; border: none; transition: all 0.2s; font-family: 'Inter', sans-serif; }
+    .btn-pricing-outline { background: white; color: var(--primary); border: 2px solid var(--primary); }
+    .btn-pricing-outline:hover { background: var(--primary-light); }
+    .btn-pricing-fill { background: var(--primary); color: white; box-shadow: 0 4px 16px rgba(79,70,229,0.3); }
+    .btn-pricing-fill:hover { background: var(--primary-dark); box-shadow: 0 8px 24px rgba(79,70,229,0.4); }
+
+    /* ─── TESTIMONIALS ─── */
+    .testimonials { background: var(--dark); color: white; }
+    .testimonials .section-title { color: white; }
+    .testimonials .section-desc { color: #94A3B8; }
+    .testi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-top: 3rem; max-width: 1100px; margin-left: auto; margin-right: auto; }
+    .testi-card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 2rem; transition: all 0.3s; }
+    .testi-card:hover { background: rgba(255,255,255,0.1); transform: translateY(-4px); }
+    .testi-stars { color: #FBBF24; font-size: 1rem; margin-bottom: 1rem; letter-spacing: 2px; }
+    .testi-card p { font-size: 0.95rem; color: #CBD5E1; line-height: 1.7; margin-bottom: 1.5rem; font-style: italic; }
+    .testi-author { display: flex; align-items: center; gap: 0.75rem; }
+    .testi-avatar { width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1rem; color: white; }
+    .testi-name strong { display: block; font-size: 0.9rem; color: white; }
+    .testi-name span { font-size: 0.8rem; color: #64748B; }
+
+    /* ─── FAQ ─── */
+    .faq { background: white; }
+    .faq-list { max-width: 720px; margin: 3rem auto 0; display: flex; flex-direction: column; gap: 1rem; }
+    .faq-item { border: 1.5px solid var(--border); border-radius: 12px; overflow: hidden; transition: border-color 0.2s; }
+    .faq-item.open { border-color: var(--primary-mid); }
+    .faq-q {
+      padding: 1.25rem 1.5rem; display: flex; justify-content: space-between; align-items: center;
+      cursor: pointer; font-weight: 600; font-size: 0.95rem; gap: 1rem;
+      user-select: none;
+    }
+    .faq-q:hover { color: var(--primary); }
+    .faq-icon { font-size: 1.3rem; color: var(--primary); transition: transform 0.3s; flex-shrink: 0; }
+    .faq-item.open .faq-icon { transform: rotate(45deg); }
+    .faq-a { padding: 0 1.5rem; max-height: 0; overflow: hidden; transition: max-height 0.3s ease, padding 0.3s; font-size: 0.9rem; color: var(--gray); line-height: 1.7; }
+    .faq-item.open .faq-a { max-height: 200px; padding: 0 1.5rem 1.25rem; }
+
+    /* ─── CONTACT ─── */
+    .contact { background: var(--gray-light); }
+    .contact-grid { display: grid; grid-template-columns: 1fr 1.2fr; gap: 4rem; align-items: start; max-width: 960px; margin: 3rem auto 0; }
+    .contact-info h3 { font-size: 1.4rem; font-weight: 700; margin-bottom: 1rem; }
+    .contact-info p { color: var(--gray); line-height: 1.7; margin-bottom: 1.5rem; font-size: 0.95rem; }
+    .contact-detail { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; font-size: 0.9rem; color: var(--gray); }
+    .contact-detail-icon { width: 36px; height: 36px; background: var(--primary-light); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--primary); font-size: 1rem; flex-shrink: 0; }
+    .contact-form { background: white; border-radius: 16px; padding: 2.5rem; border: 1px solid var(--border); }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .form-group { margin-bottom: 1.25rem; }
+    .form-group label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; }
+    .form-input { width: 100%; padding: 0.75rem 1rem; border: 1.5px solid var(--border); border-radius: 8px; font-size: 0.9rem; outline: none; font-family: 'Inter', sans-serif; transition: border-color 0.2s; background: var(--gray-light); }
+    .form-input:focus { border-color: var(--primary); background: white; }
+    textarea.form-input { min-height: 110px; resize: vertical; }
+    .btn-submit { width: 100%; padding: 0.9rem; background: var(--primary); color: white; border: none; border-radius: 10px; font-size: 1rem; font-weight: 700; cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .btn-submit:hover { background: var(--primary-dark); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(79,70,229,0.3); }
+
+    /* ─── CTA BANNER ─── */
+    .cta-banner {
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+      padding: 5rem; text-align: center; color: white;
+    }
+    .cta-banner h2 { font-size: clamp(1.8rem, 4vw, 3rem); font-weight: 900; margin-bottom: 1rem; letter-spacing: -0.5px; }
+    .cta-banner p { font-size: 1.1rem; color: rgba(255,255,255,0.8); margin-bottom: 2.5rem; max-width: 500px; margin-left: auto; margin-right: auto; }
+    .btn-cta-white { padding: 0.9rem 2.5rem; background: white; color: var(--primary); border: none; border-radius: 10px; font-size: 1rem; font-weight: 800; cursor: pointer; text-decoration: none; transition: all 0.25s; display: inline-block; }
+    .btn-cta-white:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(0,0,0,0.2); }
+
+    /* ─── FOOTER ─── */
+    footer { background: var(--dark-2); color: #94A3B8; padding: 4rem 5% 2rem; }
+    .footer-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 3rem; margin-bottom: 3rem; }
+    .footer-brand img { height: 34px; margin-bottom: 1rem; filter: brightness(0) invert(1); }
+    .footer-brand p { font-size: 0.88rem; line-height: 1.7; max-width: 260px; }
+    .footer-col h4 { color: white; font-size: 0.9rem; font-weight: 700; margin-bottom: 1.25rem; }
+    .footer-col a { display: block; color: #64748B; font-size: 0.85rem; text-decoration: none; margin-bottom: 0.6rem; transition: color 0.2s; }
+    .footer-col a:hover { color: var(--primary-mid); }
+    .footer-bottom { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 2rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; flex-wrap: wrap; gap: 1rem; }
+    .footer-bottom-links { display: flex; gap: 1.5rem; }
+    .footer-bottom-links a { color: #64748B; text-decoration: none; transition: color 0.2s; }
+    .footer-bottom-links a:hover { color: white; }
+
+    /* ─── UTILS ─── */
+    .container { max-width: 1100px; margin: 0 auto; }
+    .badge-green { background: var(--green-light); color: var(--green); padding: 0.2rem 0.7rem; border-radius: 99px; font-size: 0.75rem; font-weight: 700; }
+    .divider { width: 48px; height: 4px; background: linear-gradient(90deg, var(--primary), var(--green)); border-radius: 2px; margin: 1rem 0 1.5rem; }
+    .divider.center { margin: 1rem auto 1.5rem; }
+
+    @media (max-width: 768px) {
+      .nav-links { display: none; }
+      .about-grid, .contact-grid, .footer-grid { grid-template-columns: 1fr; }
+      .form-row { grid-template-columns: 1fr; }
+      .steps::before { display: none; }
+      .hero-demo { flex-direction: column; }
+      .cta-banner { padding: 3rem 2rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════ NAV ═══════════════════ -->
+<nav id="navbar">
+  <div class="nav-logo">
+    <img src="/BounceCure logo design/bouncecure-lockup.svg" alt="BounceCure" />
+  </div>
+  <ul class="nav-links">
+    <li><a href="#about">About</a></li>
+    <li><a href="#services">Services</a></li>
+    <li><a href="#pricing">Pricing</a></li>
+    <li><a href="#testimonials">Reviews</a></li>
+    <li><a href="#faq">FAQ</a></li>
+    <li><a href="#contact">Contact</a></li>
+  </ul>
+  <div class="nav-cta">
+    <a href="/login" class="btn-outline">Log In</a>
+    <a href="/register" class="btn-primary-sm">Get Started Free →</a>
+  </div>
+</nav>
+
+<!-- ═══════════════════ HERO ═══════════════════ -->
+<section class="hero" id="hero">
+  <div>
+    <div class="hero-badge">
+      <span></span> Trusted by 10,000+ marketers worldwide
+    </div>
+    <h1>Stop Sending Emails<br/>to <span class="highlight">Dead Addresses</span></h1>
+    <p>BounceCure verifies your email lists in seconds using real SMTP handshakes — protecting your sender reputation and boosting deliverability by up to 98%.</p>
+    <div class="hero-buttons">
+      <a href="/register" class="btn-hero btn-hero-primary">🚀 Start Free — 100 Credits</a>
+      <a href="#how" class="btn-hero btn-hero-secondary">▶ See How It Works</a>
+    </div>
+    <div class="hero-demo">
+      <input type="email" id="demoInput" placeholder="Enter an email to verify... e.g. test@company.com" />
+      <button onclick="demoVerify()">Verify Now</button>
+    </div>
+    <div class="hero-stats" style="margin-top:3rem;">
+      <div class="hero-stat"><div class="hero-stat-value">99.5%</div><div class="hero-stat-label">Accuracy Rate</div></div>
+      <div class="hero-stat"><div class="hero-stat-value">2.1B+</div><div class="hero-stat-label">Emails Verified</div></div>
+      <div class="hero-stat"><div class="hero-stat-value">&lt;2s</div><div class="hero-stat-label">Avg. Verify Time</div></div>
+      <div class="hero-stat"><div class="hero-stat-value">10k+</div><div class="hero-stat-label">Happy Customers</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ TRUSTED BY ═══════════════════ -->
+<div class="trusted">
+  <p>Trusted by teams at</p>
+  <div class="trusted-logos">
+    <div class="trusted-logo">Shopify</div>
+    <div class="trusted-logo">HubSpot</div>
+    <div class="trusted-logo">Mailchimp</div>
+    <div class="trusted-logo">Klaviyo</div>
+    <div class="trusted-logo">ActiveCampaign</div>
+    <div class="trusted-logo">ConvertKit</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ABOUT ═══════════════════ -->
+<section class="about" id="about">
+  <div class="about-grid">
+    <div class="about-visual">
+      <div style="width:100%">
+        <div class="flow-step">
+          <div class="flow-icon">📋</div>
+          <div class="flow-text"><strong>Syntax Validation</strong><span>RFC 5322 compliance check</span></div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-icon">🌐</div>
+          <div class="flow-text"><strong>DNS MX Lookup</strong><span>Mail server existence check</span></div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-icon">🔗</div>
+          <div class="flow-text"><strong>SMTP Handshake</strong><span>Real-time mailbox ping</span></div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-icon green">✔</div>
+          <div class="flow-text"><strong>Catch-All Detection</strong><span>Random probe technique</span></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-label">About BounceCure</div>
+      <h2 class="section-title">We Don't Guess. We <em style="font-style:normal;color:var(--primary)">Verify.</em></h2>
+      <div class="divider"></div>
+      <p style="color:var(--gray);line-height:1.8;font-size:0.95rem;">BounceCure uses real SMTP handshake technology — the same protocol email servers use — to check if a mailbox genuinely exists, without ever sending a single email. No guessing, no assumptions.</p>
+      <ul class="about-points">
+        <li><div class="check-icon">✓</div> 5-step deep verification pipeline for maximum accuracy</li>
+        <li><div class="check-icon">✓</div> Catch-All detection using randomized probe technique</li>
+        <li><div class="check-icon">✓</div> 7,500+ disposable domain blocklist, updated daily</li>
+        <li><div class="check-icon">✓</div> REST API for seamless integration into any workflow</li>
+        <li><div class="check-icon">✓</div> Bulk CSV processing for large list cleaning</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ SERVICES ═══════════════════ -->
+<section class="services" id="services">
+  <div class="text-center">
+    <div class="section-label">Our Services</div>
+    <h2 class="section-title">Everything You Need to<br/>Keep Your List Clean</h2>
+    <div class="divider center"></div>
+    <p class="section-desc">From single checks to enterprise-scale bulk processing — BounceCure has the right tool for every use case.</p>
+  </div>
+  <div class="services-grid">
+    <div class="service-card">
+      <div class="service-icon" style="background:#EEF0FF;">🔍</div>
+      <h3>Single Email Verify</h3>
+      <p>Instantly verify any single email address with our real-time SMTP checker. Get a full report in under 2 seconds.</p>
+    </div>
+    <div class="service-card">
+      <div class="service-icon" style="background:#D1FAE5;">📦</div>
+      <h3>Bulk Verification</h3>
+      <p>Paste up to 10,000 emails and verify them all at once. Download results as CSV for immediate use in your campaigns.</p>
+    </div>
+    <div class="service-card">
+      <div class="service-icon" style="background:#FEF3C7;">📁</div>
+      <h3>CSV List Cleaning</h3>
+      <p>Upload your CSV file directly. Our engine auto-detects the email column and cleans your entire list with one click.</p>
+    </div>
+    <div class="service-card">
+      <div class="service-icon" style="background:#FCE7F3;">🧩</div>
+      <h3>REST API Access</h3>
+      <p>Integrate BounceCure directly into your app, CRM, or marketing platform using our developer-friendly REST API.</p>
+    </div>
+    <div class="service-card">
+      <div class="service-icon" style="background:#EEF0FF;">🛡️</div>
+      <h3>Catch-All Detection</h3>
+      <p>Our unique randomized probe technique identifies catch-all servers that trick ordinary verifiers into false positives.</p>
+    </div>
+    <div class="service-card">
+      <div class="service-icon" style="background:#D1FAE5;">🚫</div>
+      <h3>Disposable Blocker</h3>
+      <p>Automatically detect and flag 7,500+ known disposable email providers like Mailinator, Guerrilla Mail, and more.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ HOW IT WORKS ═══════════════════ -->
+<section class="how" id="how">
+  <div class="text-center">
+    <div class="section-label">How It Works</div>
+    <h2 class="section-title">Verify in 4 Simple Steps</h2>
+    <div class="divider center"></div>
+  </div>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <h3>Upload or Paste</h3>
+      <p>Enter a single email, paste a bulk list, or upload your CSV file directly into the dashboard.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <h3>Deep Analysis</h3>
+      <p>Our engine checks syntax, DNS records, SMTP connection, and runs a catch-all probe automatically.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <h3>Get Results</h3>
+      <p>View detailed results instantly — Valid, Invalid, Catch-All, or Disposable — for every single address.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <h3>Export & Send</h3>
+      <p>Download your cleaned list as CSV. Only send to verified emails and watch your deliverability soar.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ PRICING ═══════════════════ -->
+<section class="pricing" id="pricing">
+  <div class="text-center">
+    <div class="section-label">Pricing</div>
+    <h2 class="section-title">Simple, Transparent Pricing</h2>
+    <div class="divider center"></div>
+    <p class="section-desc">No subscriptions. No surprises. Buy credits and use them whenever you need — they never expire.</p>
+  </div>
+  <div class="pricing-grid">
+    <div class="pricing-card">
+      <div class="pricing-name">Free</div>
+      <div class="pricing-price"><sup>$</sup>0</div>
+      <div class="pricing-credits">✔ 100 Free Credits on Sign Up</div>
+      <ul class="pricing-features">
+        <li>Single email verification</li>
+        <li>Bulk paste (up to 100)</li>
+        <li>CSV upload</li>
+        <li>API access</li>
+      </ul>
+      <button class="btn-pricing btn-pricing-outline" onclick="window.location='/register'">Get Started Free</button>
+    </div>
+    <div class="pricing-card popular">
+      <div class="popular-badge">⭐ Most Popular</div>
+      <div class="pricing-name">Starter</div>
+      <div class="pricing-price"><sup>$</sup>10</div>
+      <div class="pricing-credits">✔ 5,000 Email Credits</div>
+      <ul class="pricing-features">
+        <li>Everything in Free</li>
+        <li>Priority processing</li>
+        <li>Bulk up to 5,000</li>
+        <li>CSV download</li>
+        <li>Email support</li>
+      </ul>
+      <button class="btn-pricing btn-pricing-fill" onclick="window.location='/dashboard/billing'">Buy Starter Pack</button>
+    </div>
+    <div class="pricing-card">
+      <div class="pricing-name">Pro</div>
+      <div class="pricing-price"><sup>$</sup>50</div>
+      <div class="pricing-credits">✔ 50,000 Email Credits</div>
+      <ul class="pricing-features">
+        <li>Everything in Starter</li>
+        <li>Bulk up to 50,000</li>
+        <li>Advanced API access</li>
+        <li>Priority support</li>
+        <li>Credits never expire</li>
+      </ul>
+      <button class="btn-pricing btn-pricing-outline" onclick="window.location='/dashboard/billing'">Buy Pro Pack</button>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ TESTIMONIALS ═══════════════════ -->
+<section class="testimonials" id="testimonials">
+  <div class="text-center">
+    <div class="section-label" style="color:var(--primary-mid)">Testimonials</div>
+    <h2 class="section-title">What Our Customers Say</h2>
+    <div class="divider center"></div>
+  </div>
+  <div class="testi-grid">
+    <div class="testi-card">
+      <div class="testi-stars">★★★★★</div>
+      <p>"We cleaned a list of 25,000 emails and our bounce rate dropped from 12% to under 0.5%. BounceCure is now a permanent part of our workflow."</p>
+      <div class="testi-author">
+        <div class="testi-avatar" style="background:var(--primary);">JK</div>
+        <div class="testi-name"><strong>James Karim</strong><span>Email Marketing Manager, TechCorp</span></div>
+      </div>
+    </div>
+    <div class="testi-card">
+      <div class="testi-stars">★★★★★</div>
+      <p>"The API integration took less than 30 minutes. Now every lead that hits our CRM gets verified automatically before we send a single email."</p>
+      <div class="testi-author">
+        <div class="testi-avatar" style="background:var(--green);">SR</div>
+        <div class="testi-name"><strong>Sarah Rahman</strong><span>Founder, GrowthStack Agency</span></div>
+      </div>
+    </div>
+    <div class="testi-card">
+      <div class="testi-stars">★★★★★</div>
+      <p>"The catch-all detection is a game changer. Other tools I used would mark all catch-all domains as valid, costing me deliverability. Not BounceCure."</p>
+      <div class="testi-author">
+        <div class="testi-avatar" style="background:#F59E0B;">ML</div>
+        <div class="testi-name"><strong>Marcus Lee</strong><span>Head of Demand Gen, ScaleUp Inc.</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ FAQ ═══════════════════ -->
+<section class="faq" id="faq">
+  <div class="text-center">
+    <div class="section-label">FAQ</div>
+    <h2 class="section-title">Frequently Asked Questions</h2>
+    <div class="divider center"></div>
+  </div>
+  <div class="faq-list">
+    <div class="faq-item">
+      <div class="faq-q" onclick="toggleFaq(this)">Does BounceCure send actual emails to verify addresses? <span class="faq-icon">+</span></div>
+      <div class="faq-a">No, absolutely not. We use SMTP handshake technology — we knock on the mail server's door and ask if the mailbox exists, but we never actually send an email. This keeps your sender reputation completely clean.</div>
+    </div>
+    <div class="faq-item">
+      <div class="faq-q" onclick="toggleFaq(this)">What is a Catch-All email and why does it matter? <span class="faq-icon">+</span></div>
+      <div class="faq-a">A catch-all server accepts every incoming email regardless of whether the specific mailbox exists. Standard verifiers mark all of these as "valid," leading to bounces. BounceCure uses a special random-probe test to identify and flag these separately.</div>
+    </div>
+    <div class="faq-item">
+      <div class="faq-q" onclick="toggleFaq(this)">How long do my credits last? <span class="faq-icon">+</span></div>
+      <div class="faq-a">Your purchased credits never expire. Use them at your own pace — whether that's today or six months from now. There are no monthly minimums or subscription fees.</div>
+    </div>
+    <div class="faq-item">
+      <div class="faq-q" onclick="toggleFaq(this)">Can I integrate BounceCure into my own application? <span class="faq-icon">+</span></div>
+      <div class="faq-a">Yes! We offer a simple REST API with Bearer Token authentication. Simply register, get your token from the dashboard, and start making API calls. Documentation is available in your dashboard under "API Docs."</div>
+    </div>
+    <div class="faq-item">
+      <div class="faq-q" onclick="toggleFaq(this)">What payment methods do you accept? <span class="faq-icon">+</span></div>
+      <div class="faq-a">We use Stripe for secure payments. You can pay with any major credit or debit card (Visa, Mastercard, Amex), as well as Google Pay and Apple Pay where available.</div>
+    </div>
+    <div class="faq-item">
+      <div class="faq-q" onclick="toggleFaq(this)">What formats can I upload for bulk verification? <span class="faq-icon">+</span></div>
+      <div class="faq-a">You can upload a standard CSV file with an email column, paste emails directly (one per line) into our bulk verifier, or send a JSON array via our API. Our engine automatically detects the email column in your CSV.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ CONTACT ═══════════════════ -->
+<section class="contact" id="contact">
+  <div class="text-center">
+    <div class="section-label">Contact Us</div>
+    <h2 class="section-title">Get In Touch</h2>
+    <div class="divider center"></div>
+  </div>
+  <div class="contact-grid">
+    <div class="contact-info">
+      <h3>We'd Love to Hear From You</h3>
+      <p>Have a question about pricing, need enterprise solutions, or just want to say hello? Our team typically responds within a few hours.</p>
+      <div class="contact-detail"><div class="contact-detail-icon">📧</div> support@bouncecure.io</div>
+      <div class="contact-detail"><div class="contact-detail-icon">💬</div> Live chat available 9am–6pm (GMT+6)</div>
+      <div class="contact-detail"><div class="contact-detail-icon">📍</div> Dhaka, Bangladesh</div>
+      <div class="contact-detail"><div class="contact-detail-icon">🐦</div> @BounceCure</div>
+    </div>
+    <div class="contact-form">
+      <div class="form-row">
+        <div class="form-group">
+          <label>First Name</label>
+          <input type="text" class="form-input" placeholder="John" />
+        </div>
+        <div class="form-group">
+          <label>Last Name</label>
+          <input type="text" class="form-input" placeholder="Doe" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Email Address</label>
+        <input type="email" class="form-input" placeholder="john@company.com" />
+      </div>
+      <div class="form-group">
+        <label>Subject</label>
+        <input type="text" class="form-input" placeholder="How can we help?" />
+      </div>
+      <div class="form-group">
+        <label>Message</label>
+        <textarea class="form-input" placeholder="Tell us more about your needs..."></textarea>
+      </div>
+      <button class="btn-submit">Send Message →</button>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ CTA BANNER ═══════════════════ -->
+<div class="cta-banner">
+  <h2>Ready to Clean Your List?</h2>
+  <p>Join 10,000+ marketers who trust BounceCure to protect their sender reputation.</p>
+  <a href="/register" class="btn-cta-white">Start Free — 100 Credits Included</a>
+</div>
+
+<!-- ═══════════════════ FOOTER ═══════════════════ -->
+<footer>
+  <div class="footer-grid">
+    <div class="footer-brand">
+      <img src="/BounceCure logo design/bouncecure-lockup.svg" alt="BounceCure" />
+      <p>Enterprise-grade email verification powered by real SMTP handshake technology. Trusted by marketers worldwide.</p>
+    </div>
+    <div class="footer-col">
+      <h4>Product</h4>
+      <a href="#services">Single Verify</a>
+      <a href="#services">Bulk Verify</a>
+      <a href="#services">CSV Cleaning</a>
+      <a href="#services">API Access</a>
+      <a href="#pricing">Pricing</a>
+    </div>
+    <div class="footer-col">
+      <h4>Company</h4>
+      <a href="#about">About Us</a>
+      <a href="#testimonials">Reviews</a>
+      <a href="#contact">Contact</a>
+      <a href="#">Blog</a>
+      <a href="#">Careers</a>
+    </div>
+    <div class="footer-col">
+      <h4>Legal</h4>
+      <a href="#">Privacy Policy</a>
+      <a href="#">Terms of Service</a>
+      <a href="#">Cookie Policy</a>
+      <a href="#">GDPR</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <div>© 2025 BounceCure. All rights reserved.</div>
+    <div class="footer-bottom-links">
+      <a href="#">Twitter</a>
+      <a href="#">LinkedIn</a>
+      <a href="#">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Navbar scroll effect
+  window.addEventListener('scroll', () => {
+    document.getElementById('navbar').classList.toggle('scrolled', window.scrollY > 20);
+  });
+
+  // FAQ Toggle
+  function toggleFaq(el) {
+    const item = el.parentElement;
+    const isOpen = item.classList.contains('open');
+    document.querySelectorAll('.faq-item.open').forEach(i => i.classList.remove('open'));
+    if (!isOpen) item.classList.add('open');
+  }
+
+  // Hero demo verify
+  function demoVerify() {
+    const input = document.getElementById('demoInput');
+    const email = input.value.trim();
+    if (!email) return;
+    const btn = input.nextElementSibling;
+    btn.textContent = 'Verifying...';
+    btn.disabled = true;
+    setTimeout(() => {
+      btn.textContent = 'Verify Now';
+      btn.disabled = false;
+      if (window.confirm(`Ready to verify "${email}"?\n\nClick OK to sign up and verify instantly!`)) {
+        window.location.href = '/register';
+      }
+    }, 1500);
+  }
+
+  // Animate on scroll
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.style.opacity = '1';
+        entry.target.style.transform = 'translateY(0)';
+      }
+    });
+  }, { threshold: 0.1 });
+
+  document.querySelectorAll('.service-card, .step, .testi-card, .pricing-card, .faq-item').forEach(el => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(24px)';
+    el.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
+    observer.observe(el);
+  });
+</script>
+</body>
+</html>

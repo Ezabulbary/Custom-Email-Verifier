@@ -248,7 +248,7 @@ const ResultsTable = ({ results }) => {
               <td>
                 <div style={{display:'flex', alignItems:'center', gap:'0.5rem'}}>
                   <StatusIcon status={res.status} />
-                  <span className={`badge ${res.status}`}>{res.status.toUpperCase()}</span>
+                  <span className={`badge ${res.status || 'unknown'}`}>{(res.status || 'unknown').toUpperCase()}</span>
                 </div>
               </td>
               <td style={{color:'var(--text-secondary)'}}>{res.reason}</td>
@@ -272,6 +272,7 @@ const SingleVerify = () => {
     setLoading(true);
     try {
       const data = await apiFetch('/verify', { method: 'POST', body: JSON.stringify({ email }) });
+      if (data.error) throw new Error(data.error);
       setResult(data);
       setUser({...user, credits: user.credits - 1});
     } catch(err) { alert(err.message); }
@@ -306,6 +307,7 @@ const BulkVerify = () => {
     setLoading(true);
     try {
       const data = await apiFetch('/verify/bulk', { method: 'POST', body: JSON.stringify({ emails: arr }) });
+      if (data.error) throw new Error(data.error);
       setResults(data.results);
       setUser({...user, credits: user.credits - data.results.length});
     } catch(err) { alert(err.message); }
@@ -341,6 +343,7 @@ const CsvVerify = () => {
     setLoading(true);
     try {
       const data = await apiFetch('/verify/csv', { method: 'POST', body: formData });
+      if (data.error) throw new Error(data.error);
       setResults(data.results);
       setUser({...user, credits: user.credits - data.results.length});
       setFile(null);

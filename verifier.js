@@ -30,7 +30,9 @@ async function verifyEmail(email) {
     }
     result.syntax = true;
 
-    const domain = email.split('@')[1];
+    // Domains are case-insensitive; normalize so MX lookups and the catch-all
+    // probe use a consistent, lower-cased domain.
+    const domain = email.split('@')[1].toLowerCase();
 
     // 2. Disposable Check
     if (isDisposable(domain)) {

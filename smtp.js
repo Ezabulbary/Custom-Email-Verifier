@@ -16,6 +16,7 @@ async function checkSMTP(mxRecord, targetEmail, isCatchAllCheck = false) {
         let step = 0;
         let resultCode = 0;
         let resultMessage = '';
+        let buffer = '';
 
         const timeout = setTimeout(() => {
             socket.destroy();
@@ -26,15 +27,8 @@ async function checkSMTP(mxRecord, targetEmail, isCatchAllCheck = false) {
             socket.write(cmd + '\r\n');
         };
 
-        socket.on('data', (data) => {
-            const response = data.toString();
-            const code = parseInt(response.substring(0, 3), 10);
-            
-            // Multiline responses have a hyphen after the code (e.g. 250-SIZE)
-            if (response.charAt(3) === '-') {
-                return; // Wait for the final line
-            }
-
+        // Handle one complete SMTP reply (final line of a possibly multiline response)
+        const handleReply = (code, line) => {
             switch(step) {
                 case 0: // Expecting 220 Greeting
                     if (code === 220) {
@@ -65,13 +59,35 @@ async function checkSMTP(mxRecord, targetEmail, isCatchAllCheck = false) {
                     break;
                 case 3: // Expecting response from RCPT TO
                     resultCode = code;
-                    resultMessage = response.trim();
+                    resultMessage = line.trim();
                     step++;
                     sendCommand('QUIT');
                     break;
                 case 4: // Expecting 221 from QUIT
                     socket.destroy();
                     break;
+            }
+        };
+
+        socket.on('data', (data) => {
+            buffer += data.toString();
+
+            // An SMTP reply may span multiple lines and multiple TCP chunks.
+            // Process each complete line: "NNN-..." is a continuation, while
+            // "NNN ..." (space at index 3) marks the final line of the reply.
+            let newlineIndex;
+            while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+                const line = buffer.slice(0, newlineIndex).replace(/\r$/, '');
+                buffer = buffer.slice(newlineIndex + 1);
+
+                if (line.length < 3) continue;
+                const code = parseInt(line.substring(0, 3), 10);
+                if (Number.isNaN(code)) continue;
+
+                // Continuation line of a multiline reply -> keep reading.
+                if (line.charAt(3) === '-') continue;
+
+                handleReply(code, line);
             }
         });
 

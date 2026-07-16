@@ -85,9 +85,19 @@ app.get('/auth/me', authenticateToken, (req, res) => {
     });
 });
 
+function getUser(userId) {
+    return new Promise((resolve, reject) => {
+        db.get(`SELECT id, email, credits FROM users WHERE id = ?`, [userId], (err, user) => {
+            if (err) reject(err);
+            else resolve(user);
+        });
+    });
+}
+
 function deductCredits(userId, amount) {
     return new Promise((resolve, reject) => {
-        db.run(`UPDATE users SET credits = credits - ? WHERE id = ?`, [amount, userId], function(err) {
+        // Guard against credits going negative.
+        db.run(`UPDATE users SET credits = MAX(credits - ?, 0) WHERE id = ?`, [amount, userId], function(err) {
             if (err) reject(err);
             else resolve();
         });
@@ -99,11 +109,19 @@ function deductCredits(userId, amount) {
 app.post('/verify', authenticateToken, async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
-    
-    const result = await verifyEmail(email);
-    await deductCredits(req.user.id, 1);
-    
-    res.json(result);
+
+    try {
+        const user = await getUser(req.user.id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        if (user.credits < 1) return res.status(402).json({ error: 'Insufficient credits' });
+
+        const result = await verifyEmail(email);
+        await deductCredits(req.user.id, 1);
+
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: 'Verification failed' });
+    }
 });
 
 async function asyncPool(poolLimit, array, iteratorFn) {
@@ -125,16 +143,26 @@ async function asyncPool(poolLimit, array, iteratorFn) {
 
 app.post('/verify/bulk', authenticateToken, async (req, res) => {
     const { emails } = req.body;
-    if (!emails || !Array.isArray(emails)) {
+    if (!emails || !Array.isArray(emails) || emails.length === 0) {
         return res.status(400).json({ error: 'Array of emails is required' });
     }
 
-    const results = await asyncPool(5, emails, async (email) => {
-        return await verifyEmail(email);
-    });
+    try {
+        const user = await getUser(req.user.id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        if (user.credits < emails.length) {
+            return res.status(402).json({ error: `Insufficient credits: need ${emails.length}, have ${user.credits}` });
+        }
 
-    await deductCredits(req.user.id, results.length);
-    res.json({ total: results.length, results });
+        const results = await asyncPool(5, emails, async (email) => {
+            return await verifyEmail(email);
+        });
+
+        await deductCredits(req.user.id, results.length);
+        res.json({ total: results.length, results });
+    } catch (err) {
+        res.status(500).json({ error: 'Bulk verification failed' });
+    }
 });
 
 app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => {
@@ -150,16 +178,31 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => 
             }
         })
         .on('end', async () => {
-            fs.unlinkSync(req.file.path);
-            
-            const results = await asyncPool(5, emails, async (email) => {
-                return await verifyEmail(email);
-            });
+            fs.unlink(req.file.path, () => {});
 
-            await deductCredits(req.user.id, results.length);
-            res.json({ total: results.length, results });
+            if (emails.length === 0) {
+                return res.status(400).json({ error: 'No emails found in CSV' });
+            }
+
+            try {
+                const user = await getUser(req.user.id);
+                if (!user) return res.status(404).json({ error: 'User not found' });
+                if (user.credits < emails.length) {
+                    return res.status(402).json({ error: `Insufficient credits: need ${emails.length}, have ${user.credits}` });
+                }
+
+                const results = await asyncPool(5, emails, async (email) => {
+                    return await verifyEmail(email);
+                });
+
+                await deductCredits(req.user.id, results.length);
+                res.json({ total: results.length, results });
+            } catch (err) {
+                res.status(500).json({ error: 'CSV verification failed' });
+            }
         })
         .on('error', (err) => {
+            fs.unlink(req.file.path, () => {});
             res.status(500).json({ error: 'Failed to parse CSV' });
         });
 });
