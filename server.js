@@ -5,15 +5,18 @@ const { parse } = require('csv-parse');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const Stripe = require('stripe');
 
 const { fetchDomains } = require('./disposable');
 const { verifyEmail } = require('./verifier');
 const db = require('./db');
 
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_mock_key');
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 
 app.use(cors());
+// Webhook needs raw body, but for simplicity here we just use json for everything
 app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-123';
@@ -36,14 +39,19 @@ app.post('/auth/register', (req, res) => {
     bcrypt.hash(password, 10, (err, hash) => {
         if (err) return res.status(500).json({ error: 'Server error' });
         
-        db.run(`INSERT INTO users (email, password, credits) VALUES (?, ?, 100)`, [email, hash], function(err) {
-            if (err) {
-                if (err.message.includes('UNIQUE constraint failed')) {
-                    return res.status(400).json({ error: 'Email already exists' });
+        // If it's the first user, make them super_admin
+        db.get(`SELECT COUNT(*) as count FROM users`, [], (err, row) => {
+            const role = (row && row.count === 0) ? 'super_admin' : 'user';
+            
+            db.run(`INSERT INTO users (email, password, credits, role) VALUES (?, ?, 100, ?)`, [email, hash, role], function(err) {
+                if (err) {
+                    if (err.message.includes('UNIQUE constraint failed')) {
+                        return res.status(400).json({ error: 'Email already exists' });
+                    }
+                    return res.status(500).json({ error: 'Database error' });
                 }
-                return res.status(500).json({ error: 'Database error' });
-            }
-            res.json({ success: true, message: 'User registered successfully', userId: this.lastID });
+                res.json({ success: true, message: 'User registered successfully', userId: this.lastID, role });
+            });
         });
     });
 });
@@ -59,8 +67,8 @@ app.post('/auth/login', (req, res) => {
             if (err) return res.status(500).json({ error: 'Server error' });
             if (!isMatch) return res.status(400).json({ error: 'Invalid email or password' });
 
-            const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
-            res.json({ token, user: { id: user.id, email: user.email, credits: user.credits } });
+            const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
+            res.json({ token, user: { id: user.id, email: user.email, credits: user.credits, role: user.role } });
         });
     });
 });
@@ -78,8 +86,18 @@ function authenticateToken(req, res, next) {
     });
 }
 
+function requireAdmin(req, res, next) {
+    if (req.user.role === 'admin' || req.user.role === 'super_admin') next();
+    else res.status(403).json({ error: 'Admin access required' });
+}
+
+function requireSuperAdmin(req, res, next) {
+    if (req.user.role === 'super_admin') next();
+    else res.status(403).json({ error: 'Super Admin access required' });
+}
+
 app.get('/auth/me', authenticateToken, (req, res) => {
-    db.get(`SELECT id, email, credits FROM users WHERE id = ?`, [req.user.id], (err, user) => {
+    db.get(`SELECT id, email, credits, role FROM users WHERE id = ?`, [req.user.id], (err, user) => {
         if (err || !user) return res.status(404).json({ error: 'User not found' });
         res.json(user);
     });
@@ -103,6 +121,88 @@ function deductCredits(userId, amount) {
         });
     });
 }
+
+// --- Admin Endpoints ---
+app.get('/admin/users', authenticateToken, requireAdmin, (req, res) => {
+    const search = req.query.search ? req.query.search.trim() : '';
+    let query = `SELECT id, email, credits, role FROM users`;
+    let params = [];
+    if (search && search.length > 0) {
+        query += ` WHERE email LIKE ?`;
+        params.push(`%${search}%`);
+    }
+    query += ` ORDER BY id ASC`;
+    db.all(query, params, (err, users) => {
+        if (err) {
+            console.error('Admin users DB error:', err);
+            return res.status(500).json({ error: 'Database error' });
+        }
+        res.json(users || []);
+    });
+});
+
+app.post('/admin/users/:id/credits', authenticateToken, requireAdmin, (req, res) => {
+    const { amount } = req.body;
+    db.run(`UPDATE users SET credits = credits + ? WHERE id = ?`, [amount, req.params.id], function(err) {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        db.run(`INSERT INTO transactions (user_id, type, amount) VALUES (?, 'admin_adjustment', ?)`, [req.params.id, amount]);
+        res.json({ success: true });
+    });
+});
+
+app.post('/admin/roles', authenticateToken, requireSuperAdmin, (req, res) => {
+    const { userId, role } = req.body;
+    if (!['user', 'admin'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
+    db.run(`UPDATE users SET role = ? WHERE id = ? AND role != 'super_admin'`, [role, userId], function(err) {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        res.json({ success: true });
+    });
+});
+
+// --- Stripe Endpoints ---
+app.post('/api/checkout', authenticateToken, async (req, res) => {
+    const { packageId } = req.body; // e.g., 'starter', 'pro'
+    let amount = 0; let credits = 0;
+    if (packageId === 'starter') { amount = 1000; credits = 5000; } // $10.00
+    else if (packageId === 'pro') { amount = 5000; credits = 50000; } // $50.00
+    else return res.status(400).json({ error: 'Invalid package' });
+
+    try {
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: [{
+                price_data: { currency: 'usd', product_data: { name: `${credits} Credits` }, unit_amount: amount },
+                quantity: 1,
+            }],
+            mode: 'payment',
+            success_url: `http://localhost:5173/dashboard?payment=success`,
+            cancel_url: `http://localhost:5173/dashboard?payment=cancelled`,
+            client_reference_id: req.user.id.toString(),
+            metadata: { credits: credits.toString() }
+        });
+        res.json({ url: session.url });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Webhook for Stripe
+app.post('/api/webhooks/stripe', (req, res) => {
+    const event = req.body;
+    if (event.type === 'checkout.session.completed') {
+        const session = event.data.object;
+        const userId = session.client_reference_id;
+        const credits = parseInt(session.metadata.credits, 10);
+        
+        db.run(`UPDATE users SET credits = credits + ? WHERE id = ?`, [credits, userId], function(err) {
+            if (!err) {
+                db.run(`INSERT INTO transactions (user_id, type, amount, stripe_session_id) VALUES (?, 'purchase', ?, ?)`, 
+                    [userId, credits, session.id]);
+            }
+        });
+    }
+    res.json({ received: true });
+});
 
 // --- Verification Endpoints (Protected) ---
 

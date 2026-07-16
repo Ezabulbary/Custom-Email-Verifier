@@ -1,23 +1,36 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
 :root {
-  --bg-color: #f8fafc;
-  --bg-surface: #ffffff;
+  /* ── Brand Colors (logo থেকে নেওয়া) ── */
+  --primary:        #4F46E5;   /* Indigo */
+  --primary-dark:   #3730A3;
+  --primary-light:  #EEF0FF;
+  --primary-mid:    #C7C9FF;
+  --green:          #10B981;
+  --green-light:    #D1FAE5;
+
+  /* ── UI Colors ── */
+  --bg-color:       #f8fafc;
+  --bg-surface:     #ffffff;
   --bg-surface-hover: #f1f5f9;
-  --text-primary: #0f172a;
+  --text-primary:   #0f172a;
   --text-secondary: #64748b;
-  --accent-color: #4f46e5;
-  --accent-hover: #4338ca;
-  --success: #10b981;
-  --danger: #ef4444;
-  --warning: #f59e0b;
-  --border-color: #e2e8f0;
+  --danger:         #ef4444;
+  --warning:        #f59e0b;
+  --border-color:   #e2e8f0;
+
+  /* ── Aliases (component গুলো এটি ব্যবহার করে) ── */
+  --accent-color:   var(--primary);
+  --accent-hover:   var(--primary-dark);
+  --success:        var(--green);
+
+  /* ── Shadows ── */
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
 }
 
-* {
+*, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -53,25 +66,14 @@ input, textarea {
 /* Animations */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-
 .animate-fade-in {
   animation: fadeIn 0.4s ease forwards;
 }
 
 /* Scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: transparent; 
-}
-::-webkit-scrollbar-thumb {
-  background: #cbd5e1; 
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8; 
-}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
