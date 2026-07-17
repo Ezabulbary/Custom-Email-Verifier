@@ -3,17 +3,36 @@ const path = require('path');
 
 const dbPath = path.resolve(__dirname, 'users.sqlite');
 const db = new sqlite3.Database(dbPath, (err) => {
-    if (err) {
-        console.error('Error opening database', err.message);
-    } else {
-        console.log('Connected to the SQLite database.');
-        db.run(`CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE,
-            password TEXT,
-            credits INTEGER DEFAULT 100
-        )`);
-    }
+    if (err) console.error('Error opening database', err.message);
+    else console.log('Connected to the SQLite database.');
+});
+
+// Create the schema synchronously at require time (queued in order before any
+// query issued by callers), so later statements never race ahead of table
+// creation. db.serialize guarantees these run sequentially.
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT UNIQUE,
+        password TEXT,
+        credits INTEGER DEFAULT 100
+    )`);
+
+    // Per-execution verification history (retained for ~1 month).
+    db.run(`CREATE TABLE IF NOT EXISTS history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        type TEXT NOT NULL,                 -- 'single' | 'bulk' | 'csv'
+        total INTEGER NOT NULL DEFAULT 0,
+        valid_count INTEGER NOT NULL DEFAULT 0,
+        invalid_count INTEGER NOT NULL DEFAULT 0,
+        catch_all_count INTEGER NOT NULL DEFAULT 0,
+        unknown_count INTEGER NOT NULL DEFAULT 0,
+        results TEXT,                       -- JSON array of result objects
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_history_user_created
+            ON history (user_id, created_at)`);
 });
 
 module.exports = db;
