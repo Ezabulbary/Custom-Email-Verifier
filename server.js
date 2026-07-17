@@ -104,6 +104,87 @@ function deductCredits(userId, amount) {
     });
 }
 
+// --- Admin Endpoints ---
+app.get('/admin/users', authenticateToken, requireAdmin, (req, res) => {
+    const search = req.query.search ? req.query.search.trim() : '';
+    let query = `SELECT id, email, credits, role FROM users`;
+    let params = [];
+    if (search && search.length > 0) {
+        query += ` WHERE email LIKE ?`;
+        params.push(`%${search}%`);
+    }
+    query += ` ORDER BY id ASC`;
+    db.all(query, params, (err, users) => {
+        if (err) {
+            console.error('Admin users DB error:', err);
+            return res.status(500).json({ error: 'Database error' });
+        }
+        res.json(users || []);
+    });
+});
+
+app.post('/admin/users/:id/credits', authenticateToken, requireAdmin, (req, res) => {
+    const { amount } = req.body;
+    db.run(`UPDATE users SET credits = credits + ? WHERE id = ?`, [amount, req.params.id], function(err) {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        db.run(`INSERT INTO transactions (user_id, type, amount) VALUES (?, 'admin_adjustment', ?)`, [req.params.id, amount]);
+        res.json({ success: true });
+    });
+});
+
+app.post('/admin/roles', authenticateToken, requireSuperAdmin, (req, res) => {
+    const { userId, role } = req.body;
+    if (!['user', 'admin'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
+    db.run(`UPDATE users SET role = ? WHERE id = ? AND role != 'super_admin'`, [role, userId], function(err) {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        res.json({ success: true });
+    });
+});
+
+// --- Stripe Endpoints ---
+app.post('/api/checkout', authenticateToken, async (req, res) => {
+    const { packageId } = req.body; // e.g., 'starter', 'pro'
+    let amount = 0; let credits = 0;
+    if (packageId === 'starter') { amount = 1000; credits = 5000; } // $10.00
+    else if (packageId === 'pro') { amount = 5000; credits = 50000; } // $50.00
+    else return res.status(400).json({ error: 'Invalid package' });
+
+    try {
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: [{
+                price_data: { currency: 'usd', product_data: { name: `${credits} Credits` }, unit_amount: amount },
+                quantity: 1,
+            }],
+            mode: 'payment',
+            success_url: `${req.headers.origin || 'http://localhost:5173'}/dashboard?payment=success`,
+            cancel_url: `${req.headers.origin || 'http://localhost:5173'}/dashboard?payment=cancelled`,
+            client_reference_id: req.user.id.toString(),
+            metadata: { credits: credits.toString() }
+        });
+        res.json({ url: session.url });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Webhook for Stripe
+app.post('/api/webhooks/stripe', (req, res) => {
+    const event = req.body;
+    if (event.type === 'checkout.session.completed') {
+        const session = event.data.object;
+        const userId = session.client_reference_id;
+        const credits = parseInt(session.metadata.credits, 10);
+        
+        db.run(`UPDATE users SET credits = credits + ? WHERE id = ?`, [credits, userId], function(err) {
+            if (!err) {
+                db.run(`INSERT INTO transactions (user_id, type, amount, stripe_session_id) VALUES (?, 'purchase', ?, ?)`, 
+                    [userId, credits, session.id]);
+            }
+        });
+    }
+    res.json({ received: true });
+});
 // --- Verification Endpoints (Protected) ---
 
 app.post('/verify', authenticateToken, async (req, res) => {
