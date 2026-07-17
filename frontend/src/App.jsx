@@ -3,7 +3,7 @@ import { Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-r
 import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, Settings } from 'lucide-react';
 import './App.css';
 
-const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
+const API_URL = 'http://localhost:3001';
 
 // --- Auth Context ---
 const AuthContext = createContext();
