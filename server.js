@@ -175,8 +175,8 @@ app.post('/api/checkout', authenticateToken, async (req, res) => {
                 quantity: 1,
             }],
             mode: 'payment',
-            success_url: `http://localhost:5173/dashboard?payment=success`,
-            cancel_url: `http://localhost:5173/dashboard?payment=cancelled`,
+            success_url: `${req.headers.origin || 'http://localhost:5173'}/dashboard?payment=success`,
+            cancel_url: `${req.headers.origin || 'http://localhost:5173'}/dashboard?payment=cancelled`,
             client_reference_id: req.user.id.toString(),
             metadata: { credits: credits.toString() }
         });

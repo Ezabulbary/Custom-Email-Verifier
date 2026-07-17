@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import './App.css';
 
-const API_URL = 'http://localhost:3001';
+const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
 
 /* ══════════════════════════════════════════
    AUTH CONTEXT
