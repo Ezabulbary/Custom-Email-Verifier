@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const crypto = require('crypto');
 const { parse } = require('csv-parse');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
@@ -11,12 +12,37 @@ const { verifyEmail } = require('./verifier');
 const db = require('./db');
 
 const app = express();
-const upload = multer({ dest: 'uploads/' });
 
-app.use(cors());
-app.use(express.json());
+// Limit uploads: max 2 MB and only accept CSV files, to avoid disk/CPU DoS
+// from arbitrarily large or non-CSV uploads.
+const upload = multer({
+    dest: 'uploads/',
+    limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+    fileFilter: (req, file, cb) => {
+        const isCsv = file.mimetype === 'text/csv'
+            || file.mimetype === 'application/vnd.ms-excel'
+            || /\.csv$/i.test(file.originalname);
+        cb(isCsv ? null : new Error('Only CSV files are allowed'), isCsv);
+    }
+});
 
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-123';
+// Restrict CORS to configured origins in production; default to permissive only
+// when no allow-list is set (development convenience).
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
+app.use(cors(allowedOrigins.length ? { origin: allowedOrigins } : {}));
+app.use(express.json({ limit: '1mb' }));
+
+// Never ship a hardcoded secret: require JWT_SECRET in production, and fall back
+// to a random per-process secret (which invalidates tokens on restart) rather
+// than a guessable default that would let anyone forge auth tokens.
+const JWT_SECRET = process.env.JWT_SECRET || (() => {
+    if (process.env.NODE_ENV === 'production') {
+        console.error('FATAL: JWT_SECRET must be set in production.');
+        process.exit(1);
+    }
+    console.warn('[Security] JWT_SECRET not set — using a random ephemeral secret. Sessions reset on restart.');
+    return crypto.randomBytes(48).toString('hex');
+})();
 
 // Load disposable domains at startup
 fetchDomains().then(() => {
@@ -29,28 +55,55 @@ app.get('/health', (req, res) => {
 
 // --- Auth Endpoints ---
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// The email that should be treated as the super admin. Set ADMIN_EMAIL in the
+// environment; that account (existing or newly registered) becomes admin.
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+
+// Promote the configured admin email on startup (works for already-registered
+// accounts too).
+if (ADMIN_EMAIL) {
+    db.run(`UPDATE users SET role = 'admin' WHERE lower(email) = ?`, [ADMIN_EMAIL], function (err) {
+        if (!err && this.changes > 0) console.log(`[Admin] ${ADMIN_EMAIL} promoted to admin.`);
+    });
+}
+
 app.post('/auth/register', (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+    if (typeof email !== 'string' || typeof password !== 'string') {
+        return res.status(400).json({ error: 'Invalid input' });
+    }
+    if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'Invalid email address' });
+    if (password.length < 8 || password.length > 200) {
+        return res.status(400).json({ error: 'Password must be between 8 and 200 characters' });
+    }
 
     bcrypt.hash(password, 10, (err, hash) => {
         if (err) return res.status(500).json({ error: 'Server error' });
-        
-        db.run(`INSERT INTO users (email, password, credits) VALUES (?, ?, 100)`, [email, hash], function(err) {
-            if (err) {
-                if (err.message.includes('UNIQUE constraint failed')) {
-                    return res.status(400).json({ error: 'Email already exists' });
+
+        // First-ever user, or the configured ADMIN_EMAIL, becomes the admin.
+        db.get(`SELECT COUNT(*) AS n FROM users`, [], (cErr, row) => {
+            const isFirst = !cErr && row && row.n === 0;
+            const role = (isFirst || email.toLowerCase() === ADMIN_EMAIL) ? 'admin' : 'user';
+
+            db.run(`INSERT INTO users (email, password, credits, role) VALUES (?, ?, 100, ?)`, [email, hash, role], function(err) {
+                if (err) {
+                    if (err.message.includes('UNIQUE constraint failed')) {
+                        return res.status(400).json({ error: 'Email already exists' });
+                    }
+                    return res.status(500).json({ error: 'Database error' });
                 }
-                return res.status(500).json({ error: 'Database error' });
-            }
-            res.json({ success: true, message: 'User registered successfully', userId: this.lastID });
+                res.json({ success: true, message: 'User registered successfully', userId: this.lastID, role });
+            });
         });
     });
 });
 
 app.post('/auth/login', (req, res) => {
     const { email, password } = req.body;
-    
+
     db.get(`SELECT * FROM users WHERE email = ?`, [email], (err, user) => {
         if (err) return res.status(500).json({ error: 'Database error' });
         if (!user) return res.status(400).json({ error: 'Invalid email or password' });
@@ -59,8 +112,8 @@ app.post('/auth/login', (req, res) => {
             if (err) return res.status(500).json({ error: 'Server error' });
             if (!isMatch) return res.status(400).json({ error: 'Invalid email or password' });
 
-            const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
-            res.json({ token, user: { id: user.id, email: user.email, credits: user.credits } });
+            const token = jwt.sign({ id: user.id, email: user.email, role: user.role || 'user' }, JWT_SECRET, { expiresIn: '24h' });
+            res.json({ token, user: { id: user.id, email: user.email, credits: user.credits, role: user.role || 'user' } });
         });
     });
 });
@@ -79,11 +132,20 @@ function authenticateToken(req, res, next) {
 }
 
 app.get('/auth/me', authenticateToken, (req, res) => {
-    db.get(`SELECT id, email, credits FROM users WHERE id = ?`, [req.user.id], (err, user) => {
+    db.get(`SELECT id, email, credits, role FROM users WHERE id = ?`, [req.user.id], (err, user) => {
         if (err || !user) return res.status(404).json({ error: 'User not found' });
         res.json(user);
     });
 });
+
+// Admin-only guard — verifies the current user still has the admin role.
+function requireAdmin(req, res, next) {
+    db.get(`SELECT role FROM users WHERE id = ?`, [req.user.id], (err, row) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        if (!row || row.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+        next();
+    });
+}
 
 function getUser(userId) {
     return new Promise((resolve, reject) => {
@@ -104,6 +166,50 @@ function deductCredits(userId, amount) {
     });
 }
 
+// --- Verification history (retained ~1 month) ---
+
+const HISTORY_RETENTION_DAYS = 30;
+const HISTORY_MAX_STORED_RESULTS = 5000; // cap stored payload per execution
+
+function summarizeResults(results) {
+    const summary = { total: results.length, valid: 0, invalid: 0, catchAll: 0, unknown: 0 };
+    for (const r of results) {
+        if (r.status === 'valid') summary.valid++;
+        else if (r.status === 'invalid') summary.invalid++;
+        else if (r.status === 'catch-all') summary.catchAll++;
+        else summary.unknown++;
+    }
+    return summary;
+}
+
+function saveHistory(userId, type, results) {
+    return new Promise((resolve) => {
+        const s = summarizeResults(results);
+        const stored = results.slice(0, HISTORY_MAX_STORED_RESULTS);
+        db.run(
+            `INSERT INTO history
+                (user_id, type, total, valid_count, invalid_count, catch_all_count, unknown_count, results)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [userId, type, s.total, s.valid, s.invalid, s.catchAll, s.unknown, JSON.stringify(stored)],
+            (err) => {
+                if (err) console.error('Failed to save history:', err.message);
+                resolve(); // history is best-effort; never fail the request over it
+            }
+        );
+    });
+}
+
+function cleanupHistory() {
+    db.run(
+        `DELETE FROM history WHERE created_at < datetime('now', ?)`,
+        [`-${HISTORY_RETENTION_DAYS} days`],
+        (err) => { if (err) console.error('History cleanup error:', err.message); }
+    );
+}
+// Purge expired history at startup and periodically thereafter.
+cleanupHistory();
+setInterval(cleanupHistory, 6 * 60 * 60 * 1000);
+
 // --- Verification Endpoints (Protected) ---
 
 app.post('/verify', authenticateToken, async (req, res) => {
@@ -117,6 +223,7 @@ app.post('/verify', authenticateToken, async (req, res) => {
 
         const result = await verifyEmail(email);
         await deductCredits(req.user.id, 1);
+        await saveHistory(req.user.id, 'single', [result]);
 
         res.json(result);
     } catch (err) {
@@ -159,6 +266,7 @@ app.post('/verify/bulk', authenticateToken, async (req, res) => {
         });
 
         await deductCredits(req.user.id, results.length);
+        await saveHistory(req.user.id, 'bulk', results);
         res.json({ total: results.length, results });
     } catch (err) {
         res.status(500).json({ error: 'Bulk verification failed' });
@@ -196,6 +304,7 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => 
                 });
 
                 await deductCredits(req.user.id, results.length);
+                await saveHistory(req.user.id, 'csv', results);
                 res.json({ total: results.length, results });
             } catch (err) {
                 res.status(500).json({ error: 'CSV verification failed' });
@@ -205,6 +314,165 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => 
             fs.unlink(req.file.path, () => {});
             res.status(500).json({ error: 'Failed to parse CSV' });
         });
+});
+
+// --- History Endpoints (Protected) ---
+
+// List past executions for the logged-in user within the retention window.
+// Optional query: ?type=single|bulk|csv  &  ?limit=N (default 50, max 200)
+app.get('/history', authenticateToken, (req, res) => {
+    const { type } = req.query;
+    let limit = parseInt(req.query.limit, 10);
+    if (Number.isNaN(limit) || limit < 1) limit = 50;
+    if (limit > 200) limit = 200;
+
+    const params = [req.user.id, `-${HISTORY_RETENTION_DAYS} days`];
+    let sql = `SELECT id, type, total, valid_count, invalid_count, catch_all_count,
+                      unknown_count, results, created_at
+               FROM history
+               WHERE user_id = ? AND created_at >= datetime('now', ?)`;
+    if (type && ['single', 'bulk', 'csv'].includes(type)) {
+        sql += ` AND type = ?`;
+        params.push(type);
+    }
+    sql += ` ORDER BY datetime(created_at) DESC LIMIT ?`;
+    params.push(limit);
+
+    db.all(sql, params, (err, rows) => {
+        if (err) return res.status(500).json({ error: 'Failed to load history' });
+        const history = rows.map(r => ({
+            id: r.id,
+            type: r.type,
+            total: r.total,
+            counts: {
+                valid: r.valid_count,
+                invalid: r.invalid_count,
+                catchAll: r.catch_all_count,
+                unknown: r.unknown_count
+            },
+            results: safeParse(r.results),
+            createdAt: r.created_at
+        }));
+        res.json({ retentionDays: HISTORY_RETENTION_DAYS, history });
+    });
+});
+
+// Aggregate stats for the dashboard (within the retention window).
+app.get('/history/stats', authenticateToken, (req, res) => {
+    const params = [req.user.id, `-${HISTORY_RETENTION_DAYS} days`];
+    const sql = `SELECT
+            COUNT(*) AS executions,
+            COALESCE(SUM(total), 0) AS total_emails,
+            COALESCE(SUM(valid_count), 0) AS valid,
+            COALESCE(SUM(invalid_count), 0) AS invalid,
+            COALESCE(SUM(catch_all_count), 0) AS catch_all,
+            COALESCE(SUM(unknown_count), 0) AS unknown,
+            COALESCE(SUM(CASE WHEN type = 'csv' THEN 1 ELSE 0 END), 0) AS lists_cleaned
+        FROM history
+        WHERE user_id = ? AND created_at >= datetime('now', ?)`;
+    db.get(sql, params, (err, row) => {
+        if (err) return res.status(500).json({ error: 'Failed to load stats' });
+        res.json({
+            retentionDays: HISTORY_RETENTION_DAYS,
+            executions: row.executions,
+            totalEmails: row.total_emails,
+            listsCleaned: row.lists_cleaned,
+            counts: {
+                valid: row.valid,
+                invalid: row.invalid,
+                catchAll: row.catch_all,
+                unknown: row.unknown
+            }
+        });
+    });
+});
+
+function safeParse(json) {
+    try { return JSON.parse(json) || []; } catch (e) { return []; }
+}
+
+// --- Admin Endpoints (Protected, admin only) ---
+
+// List all users with their verification counts.
+app.get('/admin/users', authenticateToken, requireAdmin, (req, res) => {
+    const sql = `SELECT u.id, u.email, u.credits, u.role, u.created_at,
+                        COALESCE(SUM(h.total), 0) AS emails_verified,
+                        COUNT(h.id) AS executions
+                 FROM users u
+                 LEFT JOIN history h ON h.user_id = u.id
+                 GROUP BY u.id
+                 ORDER BY u.id ASC`;
+    db.all(sql, [], (err, rows) => {
+        if (err) return res.status(500).json({ error: 'Failed to load users' });
+        res.json({ users: rows });
+    });
+});
+
+// Platform-wide stats.
+app.get('/admin/stats', authenticateToken, requireAdmin, (req, res) => {
+    db.get(`SELECT
+                (SELECT COUNT(*) FROM users) AS total_users,
+                (SELECT COUNT(*) FROM users WHERE role = 'admin') AS admins,
+                (SELECT COALESCE(SUM(credits),0) FROM users) AS total_credits,
+                (SELECT COUNT(*) FROM history) AS total_executions,
+                (SELECT COALESCE(SUM(total),0) FROM history) AS total_emails,
+                (SELECT COALESCE(SUM(valid_count),0) FROM history) AS total_valid`,
+        [], (err, row) => {
+            if (err) return res.status(500).json({ error: 'Failed to load stats' });
+            res.json(row);
+        });
+});
+
+// Adjust a user's credits by a (positive or negative) delta.
+app.post('/admin/users/:id/credits', authenticateToken, requireAdmin, (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const delta = parseInt(req.body.delta, 10);
+    if (Number.isNaN(id) || Number.isNaN(delta)) return res.status(400).json({ error: 'Invalid input' });
+    db.run(`UPDATE users SET credits = MAX(credits + ?, 0) WHERE id = ?`, [delta, id], function (err) {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
+        db.get(`SELECT credits FROM users WHERE id = ?`, [id], (e, row) => {
+            res.json({ success: true, credits: row ? row.credits : null });
+        });
+    });
+});
+
+// Change a user's role ('user' | 'admin').
+app.post('/admin/users/:id/role', authenticateToken, requireAdmin, (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const role = req.body.role;
+    if (Number.isNaN(id) || !['user', 'admin'].includes(role)) return res.status(400).json({ error: 'Invalid input' });
+    if (id === req.user.id && role !== 'admin') {
+        return res.status(400).json({ error: 'You cannot remove your own admin role' });
+    }
+    db.run(`UPDATE users SET role = ? WHERE id = ?`, [role, id], function (err) {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
+        res.json({ success: true, role });
+    });
+});
+
+// Delete a user and their history.
+app.delete('/admin/users/:id', authenticateToken, requireAdmin, (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid input' });
+    if (id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
+    db.run(`DELETE FROM users WHERE id = ?`, [id], function (err) {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
+        db.run(`DELETE FROM history WHERE user_id = ?`, [id], () => {});
+        res.json({ success: true });
+    });
+});
+
+// Error handler — turns upload/multer and other errors into clean JSON responses
+// instead of leaking stack traces via the default HTML error page.
+app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError || err.message === 'Only CSV files are allowed') {
+        return res.status(400).json({ error: err.message });
+    }
+    console.error('Unhandled error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
 });
 
 const PORT = process.env.PORT || 3001;
