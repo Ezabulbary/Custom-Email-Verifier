@@ -12,6 +12,13 @@
   --danger: #ef4444;
   --warning: #f59e0b;
   --border-color: #e2e8f0;
+  /* Brand palette — derived from the logo (indigo envelope + green check) */
+  --brand-1: #4f46e5;   /* logo indigo */
+  --brand-2: #6d28d9;   /* violet */
+  --brand-3: #8b5cf6;   /* light violet */
+  --brand-green: #22c55e; /* logo check */
+  --brand-gradient: linear-gradient(135deg, #4f46e5, #7c3aed);
+  --brand-gradient-soft: linear-gradient(135deg, #6366f1, #8b5cf6);
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);

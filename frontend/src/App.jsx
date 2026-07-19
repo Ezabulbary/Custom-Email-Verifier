@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
-import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Sparkles } from 'lucide-react';
+import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Sparkles, Star, Quote } from 'lucide-react';
 import './App.css';
 
 // API base URL. In production set VITE_API_URL (e.g. '' for same-origin behind
@@ -571,9 +571,9 @@ const STEPS = [
 ];
 
 const TESTIMONIALS = [
-  { quote: 'Our bounce rate dropped from 12% to under 1% after cleaning our list with BounceCure.', name: 'Sarah K.', role: 'Growth Lead' },
-  { quote: 'The catch-all confidence score is a game changer — we finally trust our "risky" segment.', name: 'Daniel R.', role: 'Email Marketer' },
-  { quote: 'Bulk + CSV verification saved our sales team hours every week.', name: 'Aisha M.', role: 'Sales Ops' },
+  { quote: 'Our bounce rate dropped from 12% to under 1% after cleaning our list with BounceCure.', name: 'Sarah K.', role: 'Growth Lead', company: 'Northwind', rating: 5 },
+  { quote: 'The catch-all confidence score is a game changer — we finally trust our "risky" segment.', name: 'Daniel R.', role: 'Email Marketer', company: 'Loop Media', rating: 5 },
+  { quote: 'Bulk + CSV verification saved our sales team hours every week.', name: 'Aisha M.', role: 'Sales Ops', company: 'Brightlane', rating: 5 },
 ];
 
 const FAQS = [
@@ -733,22 +733,33 @@ const Landing = () => (
       </div>
     </section>
 
-    <section className="testi-section">
-      <Reveal><h2 className="section-title">Loved by senders</h2></Reveal>
-      <div className="testi-grid">
-        {TESTIMONIALS.map((t, i) => (
-          <Reveal key={i} variant="up" delay={i * 90} className="testi-card card">
-            <p className="testi-quote">“{t.quote}”</p>
-            <div className="testi-author"><div className="testi-avatar">{t.name.charAt(0)}</div><div><strong>{t.name}</strong><div className="testi-role">{t.role}</div></div></div>
-          </Reveal>
-        ))}
-      </div>
-    </section>
-
     <section id="pricing" className="pricing-section">
       <Reveal><h2 className="section-title">Simple, transparent pricing</h2></Reveal>
       <Reveal delay={60}><p className="section-sub">Start free. Upgrade when you grow.</p></Reveal>
       <PricingCards />
+    </section>
+
+    <section className="testi-section">
+      <Reveal><h2 className="section-title">Loved by senders</h2></Reveal>
+      <Reveal delay={60}><p className="section-sub">Teams of every size trust BounceCure to keep their lists clean.</p></Reveal>
+      <div className="testi-grid">
+        {TESTIMONIALS.map((t, i) => (
+          <Reveal key={i} variant="up" delay={i * 90} className="testi-card card">
+            <Quote size={26} className="testi-mark" />
+            <div className="testi-stars" aria-label={`${t.rating} out of 5 stars`}>
+              {Array.from({ length: t.rating }).map((_, s) => <Star key={s} size={16} fill="currentColor" strokeWidth={0} />)}
+            </div>
+            <p className="testi-quote">{t.quote}</p>
+            <div className="testi-author">
+              <div className="testi-avatar">{t.name.charAt(0)}</div>
+              <div>
+                <strong>{t.name}</strong>
+                <div className="testi-role">{t.role} · {t.company}</div>
+              </div>
+            </div>
+          </Reveal>
+        ))}
+      </div>
     </section>
 
     <section className="faq-section">
@@ -813,7 +824,9 @@ const Login = () => {
   };
 
   return (
-    <div className="auth-container animate-fade-in">
+    <div className="auth-page">
+      <PublicNav />
+      <div className="auth-container animate-fade-in">
       <div className="auth-left">
         <Link to="/" style={{textDecoration:'none', marginBottom:'1.5rem'}}><Logo size={34} light /></Link>
         <h1>{BRAND.name}</h1>
@@ -836,6 +849,7 @@ const Login = () => {
           </div>
           <LegalLinks />
         </div>
+      </div>
       </div>
     </div>
   );
@@ -864,7 +878,9 @@ const Register = () => {
   };
 
   return (
-    <div className="auth-container animate-fade-in">
+    <div className="auth-page">
+      <PublicNav />
+      <div className="auth-container animate-fade-in">
       <div className="auth-left">
         <Link to="/" style={{textDecoration:'none', marginBottom:'1.5rem'}}><Logo size={34} light /></Link>
         <h1>{BRAND.name}</h1>
@@ -888,6 +904,7 @@ const Register = () => {
           </div>
           <LegalLinks />
         </div>
+      </div>
       </div>
     </div>
   );
