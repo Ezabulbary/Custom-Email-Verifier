@@ -6,7 +6,7 @@ import './App.css';
 // API base URL. In production set VITE_API_URL (e.g. '' for same-origin behind
 // an nginx reverse proxy, or 'https://api.yourdomain.com'); defaults to the
 // local backend for development.
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
+const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
 
 // Brand / legal placeholders — replace with your real company details before
 // going live. The legal pages below are professional templates and should be
