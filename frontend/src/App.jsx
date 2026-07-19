@@ -843,6 +843,28 @@ const PricingPage = () => (
 
 // --- Pages ---
 
+// Full-page, single-tone auth layout (light lavender that matches the logo),
+// with a centered card. Shared by Login and Register.
+const AuthShell = ({ title, subtitle, error, children, alt }) => (
+  <div className="auth-page">
+    <PublicNav />
+    <div className="auth-shell">
+      <div className="auth-glow" />
+      <div className="auth-card animate-fade-in">
+        <div className="auth-card-head">
+          <Link to="/" className="auth-logo"><Logo size={30} /></Link>
+          <div className="auth-title">{title}</div>
+          <div className="auth-subtitle">{subtitle}</div>
+        </div>
+        {error && <div className="auth-error"><AlertCircle size={16} /> {error}</div>}
+        {children}
+        <div className="auth-alt">{alt}</div>
+        <LegalLinks />
+      </div>
+    </div>
+  </div>
+);
+
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -866,34 +888,20 @@ const Login = () => {
   };
 
   return (
-    <div className="auth-page">
-      <PublicNav />
-      <div className="auth-container animate-fade-in">
-      <div className="auth-left">
-        <Link to="/" style={{textDecoration:'none', marginBottom:'1.5rem'}}><Logo size={34} light /></Link>
-        <h1>{BRAND.name}</h1>
-        <p>{BRAND.tagline}</p>
-      </div>
-      <div className="auth-right">
-        <div className="auth-form-container">
-          <div className="auth-title">Welcome Back</div>
-          <div className="auth-subtitle">Log in to your account</div>
-          {error && <div style={{color:'var(--danger)', marginBottom:'1rem'}}>{error}</div>}
-          <form onSubmit={handleSubmit} className="form-group">
-            <label>Email</label>
-            <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="input-field" required />
-            <label>Password</label>
-            <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" required />
-            <button type="submit" className="btn-primary" style={{marginTop:'1rem'}}>Sign In</button>
-          </form>
-          <div style={{marginTop:'1.5rem', textAlign:'center', color:'var(--text-secondary)'}}>
-            Don't have an account? <Link to="/register" style={{color:'var(--accent-color)', fontWeight:600}}>Register</Link>
-          </div>
-          <LegalLinks />
-        </div>
-      </div>
-      </div>
-    </div>
+    <AuthShell
+      title="Welcome back"
+      subtitle="Log in to your account"
+      error={error}
+      alt={<>Don't have an account? <Link to="/register">Register</Link></>}
+    >
+      <form onSubmit={handleSubmit} className="form-group">
+        <label>Email</label>
+        <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="input-field" placeholder="you@company.com" required />
+        <label>Password</label>
+        <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" placeholder="••••••••" required />
+        <button type="submit" className="btn-primary" style={{marginTop:'1rem'}}>Sign In</button>
+      </form>
+    </AuthShell>
   );
 };
 
@@ -920,35 +928,21 @@ const Register = () => {
   };
 
   return (
-    <div className="auth-page">
-      <PublicNav />
-      <div className="auth-container animate-fade-in">
-      <div className="auth-left">
-        <Link to="/" style={{textDecoration:'none', marginBottom:'1.5rem'}}><Logo size={34} light /></Link>
-        <h1>{BRAND.name}</h1>
-        <p>Start verifying emails with 100 free credits.</p>
-      </div>
-      <div className="auth-right">
-        <div className="auth-form-container">
-          <div className="auth-title">Create Account</div>
-          <div className="auth-subtitle">Sign up to get started</div>
-          {error && <div style={{color:'var(--danger)', marginBottom:'1rem'}}>{error}</div>}
-          <form onSubmit={handleSubmit} className="form-group">
-            <label>Email</label>
-            <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="input-field" required />
-            <label>Password</label>
-            <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" required minLength={8} />
-            <span style={{fontSize:'0.8rem', color:'var(--text-secondary)'}}>At least 8 characters.</span>
-            <button type="submit" className="btn-primary" style={{marginTop:'1rem'}}>Sign Up</button>
-          </form>
-          <div style={{marginTop:'1.5rem', textAlign:'center', color:'var(--text-secondary)'}}>
-            Already have an account? <Link to="/login" style={{color:'var(--accent-color)', fontWeight:600}}>Login</Link>
-          </div>
-          <LegalLinks />
-        </div>
-      </div>
-      </div>
-    </div>
+    <AuthShell
+      title="Create your account"
+      subtitle="Start verifying emails with 100 free credits"
+      error={error}
+      alt={<>Already have an account? <Link to="/login">Login</Link></>}
+    >
+      <form onSubmit={handleSubmit} className="form-group">
+        <label>Email</label>
+        <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="input-field" placeholder="you@company.com" required />
+        <label>Password</label>
+        <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" placeholder="At least 8 characters" required minLength={8} />
+        <span style={{fontSize:'0.8rem', color:'var(--text-secondary)'}}>At least 8 characters.</span>
+        <button type="submit" className="btn-primary" style={{marginTop:'1rem'}}>Sign Up</button>
+      </form>
+    </AuthShell>
   );
 };
 
