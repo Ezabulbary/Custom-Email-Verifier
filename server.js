@@ -9,6 +9,7 @@ const jwt = require('jsonwebtoken');
 
 const { fetchDomains } = require('./disposable');
 const { verifyEmail } = require('./verifier');
+const { isGoogleEnabled, verifyIdToken } = require('./firebaseAdmin');
 const db = require('./db');
 
 const app = express();
@@ -107,6 +108,7 @@ app.post('/auth/login', (req, res) => {
     db.get(`SELECT * FROM users WHERE email = ?`, [email], (err, user) => {
         if (err) return res.status(500).json({ error: 'Database error' });
         if (!user) return res.status(400).json({ error: 'Invalid email or password' });
+        if (!user.password) return res.status(400).json({ error: 'This account uses Google sign-in. Continue with Google.' });
 
         bcrypt.compare(password, user.password, (err, isMatch) => {
             if (err) return res.status(500).json({ error: 'Server error' });
@@ -114,6 +116,55 @@ app.post('/auth/login', (req, res) => {
 
             const token = jwt.sign({ id: user.id, email: user.email, role: user.role || 'user' }, JWT_SECRET, { expiresIn: '24h' });
             res.json({ token, user: { id: user.id, email: user.email, credits: user.credits, role: user.role || 'user' } });
+        });
+    });
+});
+
+// Google sign-in / sign-up. The frontend obtains a Firebase ID token via the
+// Google popup and posts it here; we verify it with firebase-admin, then find
+// or create the user and issue our own app JWT (so the rest of the API is
+// unchanged). Google accounts are stored with a NULL password.
+app.post('/auth/google', async (req, res) => {
+    const { idToken } = req.body || {};
+    if (!idToken || typeof idToken !== 'string') {
+        return res.status(400).json({ error: 'Missing Google token' });
+    }
+    if (!isGoogleEnabled()) {
+        return res.status(501).json({ error: 'Google sign-in is not configured on the server.' });
+    }
+
+    let decoded;
+    try {
+        decoded = await verifyIdToken(idToken);
+    } catch (e) {
+        return res.status(401).json({ error: 'Invalid or expired Google token' });
+    }
+
+    const email = (decoded.email || '').toLowerCase();
+    if (!email) return res.status(400).json({ error: 'Google account has no email address' });
+
+    const issue = (u) => {
+        const token = jwt.sign({ id: u.id, email: u.email, role: u.role || 'user' }, JWT_SECRET, { expiresIn: '24h' });
+        res.json({ token, user: { id: u.id, email: u.email, credits: u.credits, role: u.role || 'user' } });
+    };
+
+    db.get(`SELECT * FROM users WHERE lower(email) = ?`, [email], (err, user) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        if (user) return issue(user);
+
+        // First-ever user, or the configured ADMIN_EMAIL, becomes the admin.
+        db.get(`SELECT COUNT(*) AS n FROM users`, [], (cErr, row) => {
+            const isFirst = !cErr && row && row.n === 0;
+            const role = (isFirst || email === ADMIN_EMAIL) ? 'admin' : 'user';
+            db.run(`INSERT INTO users (email, password, credits, role) VALUES (?, NULL, 100, ?)`, [email, role], function (insErr) {
+                if (insErr) {
+                    if (insErr.message.includes('UNIQUE constraint failed')) {
+                        return db.get(`SELECT * FROM users WHERE lower(email) = ?`, [email], (e2, u2) => u2 ? issue(u2) : res.status(500).json({ error: 'Database error' }));
+                    }
+                    return res.status(500).json({ error: 'Database error' });
+                }
+                issue({ id: this.lastID, email, credits: 100, role });
+            });
         });
     });
 });

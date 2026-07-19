@@ -2,11 +2,12 @@ import React, { useState, useEffect, useRef, useCallback, createContext, useCont
 import { Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
 import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Sparkles, Star, Quote } from 'lucide-react';
 import './App.css';
+import { googleSignIn, isFirebaseConfigured } from './firebase';
 
 // API base URL. In production set VITE_API_URL (e.g. '' for same-origin behind
 // an nginx reverse proxy, or 'https://api.yourdomain.com'); defaults to the
 // local backend for development.
-const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
 
 // Brand / legal placeholders — replace with your real company details before
 // going live. The legal pages below are professional templates and should be
@@ -626,6 +627,8 @@ const PublicNav = () => {
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const goToSection = useSectionNav();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -645,12 +648,18 @@ const PublicNav = () => {
     setOpen(false);
     goToSection(id);
   };
+  const goHome = (e) => {
+    e.preventDefault();
+    setOpen(false);
+    if (location.pathname === '/') window.scrollTo({ top: 0, behavior: 'smooth' });
+    else navigate('/');
+  };
   const close = () => setOpen(false);
 
   return (
     <div className={`public-nav-wrap ${scrolled ? 'scrolled' : ''}`}>
       <div className="public-nav">
-        <Link to="/" style={{ textDecoration: 'none' }} onClick={close}><Logo /></Link>
+        <Link to="/" className="nav-logo" style={{ textDecoration: 'none' }} onClick={close}><Logo /></Link>
 
         <button
           className="nav-toggle"
@@ -661,13 +670,14 @@ const PublicNav = () => {
           {open ? <X size={24} /> : <Menu size={24} />}
         </button>
 
-        <div className={`public-nav-links ${open ? 'open' : ''}`}>
+        <nav className={`public-nav-links ${open ? 'open' : ''}`}>
+          <a href="/" onClick={goHome}>Home</a>
           <a href="#features" onClick={anchor('features')}>Features</a>
           <a href="#how" onClick={anchor('how')}>How it works</a>
           <Link to="/pricing" onClick={close}>Pricing</Link>
           <Link to="/login" onClick={close}>Login</Link>
-          <Link to="/register" className="btn-primary" style={{ width: 'auto', padding: '0.55rem 1.2rem' }} onClick={close}>Get Started</Link>
-        </div>
+          <Link to="/register" onClick={close}>Get Started</Link>
+        </nav>
 
         {open && <div className="nav-backdrop" onClick={close} />}
       </div>
@@ -843,27 +853,86 @@ const PricingPage = () => (
 
 // --- Pages ---
 
-// Full-page, single-tone auth layout (light lavender that matches the logo),
-// with a centered card. Shared by Login and Register.
-const AuthShell = ({ title, subtitle, error, children, alt }) => (
-  <div className="auth-page">
-    <PublicNav />
-    <div className="auth-shell">
-      <div className="auth-glow" />
-      <div className="auth-card animate-fade-in">
-        <div className="auth-card-head">
-          <Link to="/" className="auth-logo"><Logo size={30} /></Link>
-          <div className="auth-title">{title}</div>
-          <div className="auth-subtitle">{subtitle}</div>
+// Google "G" mark (multicolour). lucide has no brand logo, so inline it.
+const GoogleIcon = (props) => (
+  <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true" {...props}>
+    <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.4 29.3 35 24 35c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.5 5.1 29.5 3 24 3 12.4 3 3 12.4 3 24s9.4 21 21 21c10.5 0 20-8 20-21 0-1.3-.1-2.3-.4-3.5z"/>
+    <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.5 5.1 29.5 3 24 3 16 3 9.1 7.6 6.3 14.7z"/>
+    <path fill="#4CAF50" d="M24 45c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.1 36 26.7 37 24 37c-5.3 0-9.7-2.6-11.3-7l-6.5 5C9 40.4 15.9 45 24 45z"/>
+    <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.6l6.2 5.2C41.9 35.6 44 30.3 44 24c0-1.3-.1-2.3-.4-3.5z"/>
+  </svg>
+);
+
+// Two-part auth layout — both halves share the same light tone. One side is the
+// form, the other is brand copy; `reverse` mirrors them (form left / brand right).
+const AuthShell = ({ title, subtitle, error, children, alt, reverse, brandTitle, brandText }) => {
+  const { login } = useAuth();
+  const navigate = useNavigate();
+  const [gError, setGError] = useState('');
+  const [gLoading, setGLoading] = useState(false);
+
+  const handleGoogle = async () => {
+    setGError('');
+    setGLoading(true);
+    try {
+      const idToken = await googleSignIn();
+      const data = await apiFetch('/auth/google', { method: 'POST', body: JSON.stringify({ idToken }) });
+      if (data.error) throw new Error(data.error);
+      login(data.token, data.user);
+      navigate('/dashboard');
+    } catch (err) {
+      setGError(friendlyError(err));
+    } finally {
+      setGLoading(false);
+    }
+  };
+
+  return (
+    <div className="auth-page">
+      <PublicNav />
+      <div className={`auth-split ${reverse ? 'reverse' : ''}`}>
+        <aside className="auth-brand-side">
+          <div className="auth-glow" />
+          <div className="auth-brand-inner">
+            <Link to="/" className="auth-logo"><Logo size={38} /></Link>
+            <h2 className="auth-brand-title">{brandTitle}</h2>
+            <p className="auth-brand-text">{brandText}</p>
+            <ul className="auth-brand-points">
+              <li><CheckCircle2 size={18} /> Real-time SMTP mailbox checks</li>
+              <li><CheckCircle2 size={18} /> Catch-all &amp; disposable detection</li>
+              <li><CheckCircle2 size={18} /> 100 free verifications to start</li>
+            </ul>
+          </div>
+        </aside>
+
+        <div className="auth-form-side">
+          <div className="auth-card animate-fade-in">
+            <div className="auth-title">{title}</div>
+            <div className="auth-subtitle">{subtitle}</div>
+
+            {(error || gError) && <div className="auth-error"><AlertCircle size={16} /> {error || gError}</div>}
+
+            <button type="button" className="google-btn" onClick={handleGoogle} disabled={gLoading}>
+              {gLoading ? <Loader2 className="loader" size={18} /> : <GoogleIcon />} Continue with Google
+            </button>
+            {!isFirebaseConfigured && (
+              <div className="google-hint">Google sign-in needs Firebase keys — see SETUP.md.</div>
+            )}
+
+            <div className="auth-divider"><span>or use your email</span></div>
+
+            {children}
+
+            <div className="auth-alt">{alt}</div>
+            <p className="auth-legal-note">
+              By continuing you agree to our <Link to="/terms">Terms</Link> and <Link to="/privacy">Privacy Policy</Link>.
+            </p>
+          </div>
         </div>
-        {error && <div className="auth-error"><AlertCircle size={16} /> {error}</div>}
-        {children}
-        <div className="auth-alt">{alt}</div>
-        <LegalLinks />
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -892,6 +961,8 @@ const Login = () => {
       title="Welcome back"
       subtitle="Log in to your account"
       error={error}
+      brandTitle="Good to see you again."
+      brandText="Log in to verify emails, clean your lists and keep your bounce rate low."
       alt={<>Don't have an account? <Link to="/register">Register</Link></>}
     >
       <form onSubmit={handleSubmit} className="form-group">
@@ -932,6 +1003,9 @@ const Register = () => {
       title="Create your account"
       subtitle="Start verifying emails with 100 free credits"
       error={error}
+      reverse
+      brandTitle="Stop the bounce. Verify every email."
+      brandText="Create a free account and get 100 verifications — no credit card required."
       alt={<>Already have an account? <Link to="/login">Login</Link></>}
     >
       <form onSubmit={handleSubmit} className="form-group">

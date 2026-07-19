@@ -4,4 +4,8 @@ frontend/dist/
 users.sqlite
 uploads/
 .env
+.env.local
+frontend/.env
+frontend/.env.local
+serviceAccount.json
 .DS_Store
