@@ -670,14 +670,18 @@ const PublicNav = () => {
           {open ? <X size={24} /> : <Menu size={24} />}
         </button>
 
-        <nav className={`public-nav-links ${open ? 'open' : ''}`}>
-          <a href="/" onClick={goHome}>Home</a>
-          <a href="#features" onClick={anchor('features')}>Features</a>
-          <a href="#how" onClick={anchor('how')}>How it works</a>
-          <Link to="/pricing" onClick={close}>Pricing</Link>
-          <Link to="/login" onClick={close}>Login</Link>
-          <Link to="/register" onClick={close}>Get Started</Link>
-        </nav>
+        <div className={`nav-menu ${open ? 'open' : ''}`}>
+          <nav className="public-nav-links">
+            <a href="/" onClick={goHome}>Home</a>
+            <a href="#features" onClick={anchor('features')}>Features</a>
+            <a href="#how" onClick={anchor('how')}>How it works</a>
+            <Link to="/pricing" onClick={close}>Pricing</Link>
+          </nav>
+          <div className="nav-actions">
+            <Link to="/login" className="nav-login" onClick={close}>Login</Link>
+            <Link to="/register" className="nav-cta" onClick={close}>Get Started</Link>
+          </div>
+        </div>
 
         {open && <div className="nav-backdrop" onClick={close} />}
       </div>
