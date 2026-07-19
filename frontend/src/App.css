@@ -7,12 +7,24 @@
 }
 .auth-split {
   flex: 1;
+  width: 100%;
+  max-width: 1080px;      /* keep the two halves close instead of screen-wide */
+  align-self: center;     /* centre the whole split within the page */
   display: grid;
   grid-template-columns: 1fr 1fr;
   align-items: stretch;
 }
 .auth-split.reverse .auth-brand-side { order: 2; }
 .auth-split.reverse .auth-form-side { order: 1; }
+
+/* On desktop, pull each column's content toward the centre so the form and the
+   brand copy sit next to each other with a controlled gap (not screen-wide). */
+@media (min-width: 901px) {
+  .auth-brand-side { justify-content: flex-end; padding: 3rem 3rem 3rem 1.5rem; }
+  .auth-form-side { justify-content: flex-start; padding: 3rem 1.5rem 3rem 3rem; }
+  .auth-split.reverse .auth-brand-side { justify-content: flex-start; padding: 3rem 1.5rem 3rem 3rem; }
+  .auth-split.reverse .auth-form-side { justify-content: flex-end; padding: 3rem 3rem 3rem 1.5rem; }
+}
 
 /* Brand half */
 .auth-brand-side {
