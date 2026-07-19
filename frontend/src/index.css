@@ -23,6 +23,11 @@
   padding: 0;
 }
 
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 80px; /* keep anchored sections clear of the sticky nav */
+}
+
 body {
   font-family: 'Inter', sans-serif;
   background-color: var(--bg-color);

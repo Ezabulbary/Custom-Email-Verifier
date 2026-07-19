@@ -1,6 +1,6 @@
-import React, { useState, useEffect, createContext, useContext } from 'react';
+import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
-import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck } from 'lucide-react';
+import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Sparkles } from 'lucide-react';
 import './App.css';
 
 // API base URL. In production set VITE_API_URL (e.g. '' for same-origin behind
@@ -308,6 +308,235 @@ const HistoryPanel = ({ type, version }) => {
   );
 };
 
+// --- Interactive helpers (landing) ---
+
+// Reveal-on-scroll wrapper. variant="up" slides up + fades; variant="fade" only
+// fades (used on cards that have their own :hover transform so the two don't fight).
+const Reveal = ({ children, className = '', variant = 'up', delay = 0, as: Tag = 'div', ...rest }) => {
+  const ref = useRef(null);
+  // Fall back to "shown" when IntersectionObserver isn't available (e.g. SSR/old
+  // browsers) so content is never stuck hidden.
+  const [shown, setShown] = useState(() => typeof IntersectionObserver === 'undefined');
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) { setShown(true); io.disconnect(); }
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  return (
+    <Tag
+      ref={ref}
+      className={`reveal reveal-${variant} ${shown ? 'in-view' : ''} ${className}`.trim()}
+      style={{ transitionDelay: `${delay}ms` }}
+      {...rest}
+    >
+      {children}
+    </Tag>
+  );
+};
+
+// Counts up to a numeric value the first time it scrolls into view. Keeps any
+// non-numeric prefix/suffix (e.g. "<2s", "15M+", "99.5%", "30-day").
+const Counter = ({ value }) => {
+  const match = /^(\D*)([\d.]+)(.*)$/.exec(String(value));
+  const ref = useRef(null);
+  const [n, setN] = useState(0);
+  const done = useRef(false);
+
+  const target = match ? parseFloat(match[2]) : NaN;
+  const decimals = match && match[2].includes('.') ? 1 : 0;
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !match || isNaN(target) || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting || done.current) return;
+      done.current = true;
+      const duration = 1300;
+      let start = null;
+      const tick = (ts) => {
+        if (start === null) start = ts;
+        const p = Math.min((ts - start) / duration, 1);
+        const eased = 1 - Math.pow(1 - p, 3);
+        setN(target * eased);
+        if (p < 1) requestAnimationFrame(tick); else setN(target);
+      };
+      requestAnimationFrame(tick);
+    }, { threshold: 0.5 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [match, target]);
+
+  if (!match || isNaN(target)) return <span>{value}</span>;
+  const shown = decimals ? n.toFixed(1) : Math.round(n).toString();
+  return <span ref={ref}>{match[1]}{shown}{match[3]}</span>;
+};
+
+// Smooth-scroll to a section id — works from any page (navigates home first if
+// we're not on the landing page, so the nav links are usable everywhere).
+const useSectionNav = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  return useCallback((id) => {
+    const scrollTo = () => {
+      const el = document.getElementById(id);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    if (location.pathname !== '/') {
+      navigate('/');
+      // let the landing page mount before scrolling
+      setTimeout(scrollTo, 60);
+      setTimeout(scrollTo, 220);
+    } else {
+      scrollTo();
+    }
+  }, [navigate, location.pathname]);
+};
+
+// Floating "back to top" button that appears once the user scrolls down.
+const BackToTop = () => {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setShow(window.scrollY > 600);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+  return (
+    <button
+      className={`back-to-top ${show ? 'show' : ''}`}
+      aria-label="Back to top"
+      onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+    >
+      <ArrowUp size={20} />
+    </button>
+  );
+};
+
+// --- Client-side instant checker used by the hero demo ---
+const DEMO_DISPOSABLE = ['mailinator.com', 'tempmail.com', '10minutemail.com', 'guerrillamail.com', 'yopmail.com', 'trashmail.com', 'sharklasers.com', 'getnada.com', 'temp-mail.org', 'throwaway.email'];
+const DEMO_ROLE = ['info', 'admin', 'support', 'sales', 'contact', 'noreply', 'no-reply', 'hello', 'team'];
+const DEMO_EXAMPLES = ['john@company.com', 'info@mailinator.com', 'not-an-email'];
+
+const analyzeEmail = (raw) => {
+  const email = (raw || '').trim().toLowerCase();
+  const syntaxOk = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email);
+  const [local, domain] = syntaxOk ? email.split('@') : ['', ''];
+  const disposable = syntaxOk && DEMO_DISPOSABLE.includes(domain);
+  const roleBased = syntaxOk && DEMO_ROLE.includes(local);
+
+  let status, confidence, reason;
+  if (!syntaxOk) {
+    status = 'invalid'; confidence = 97; reason = 'Malformed address — failed syntax validation.';
+  } else if (disposable) {
+    status = 'invalid'; confidence = 93; reason = 'Disposable / throwaway email provider.';
+  } else if (roleBased) {
+    status = 'catch-all'; confidence = 55; reason = 'Role-based mailbox — deliverability is uncertain.';
+  } else {
+    status = 'valid'; confidence = 92; reason = 'Valid syntax, live domain and a reachable mailbox.';
+  }
+
+  return {
+    status, confidence, reason,
+    checks: [
+      { label: 'Syntax', ok: syntaxOk },
+      { label: 'MX record', ok: syntaxOk && !disposable },
+      { label: 'Not disposable', ok: syntaxOk && !disposable },
+      { label: 'Mailbox', ok: status === 'valid' },
+    ],
+  };
+};
+
+const HeroDemo = () => {
+  const [email, setEmail] = useState('john@company.com');
+  const [phase, setPhase] = useState('idle'); // idle | checking | done
+  const [result, setResult] = useState(null);
+  const timers = useRef([]);
+
+  const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
+  useEffect(() => clearTimers, []);
+
+  const verify = (value) => {
+    const target = (value ?? email).trim();
+    if (!target || phase === 'checking') return;
+    clearTimers();
+    setResult(null);
+    setPhase('checking');
+    timers.current.push(setTimeout(() => {
+      setResult(analyzeEmail(target));
+      setPhase('done');
+    }, 1050));
+  };
+
+  const tryExample = (ex) => { setEmail(ex); verify(ex); };
+
+  return (
+    <div className="hero-card card">
+      <div className="hero-card-head">
+        <MailCheck size={16} color="var(--accent-color)" /> Live verification
+        <span className="hero-demo-tag"><Sparkles size={12} /> Try it</span>
+      </div>
+
+      <form
+        className="hero-demo-form"
+        onSubmit={(e) => { e.preventDefault(); verify(); }}
+      >
+        <input
+          type="text"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="hero-demo-input"
+          placeholder="you@example.com"
+          aria-label="Email to verify"
+          spellCheck={false}
+        />
+        <button type="submit" className="btn-primary hero-demo-btn" disabled={phase === 'checking'}>
+          {phase === 'checking' ? <Loader2 className="loader" size={16} /> : <Search size={16} />}
+          <span className="hero-demo-btn-label">Verify</span>
+        </button>
+      </form>
+
+      <div className="hero-demo-examples">
+        <span>Try:</span>
+        {DEMO_EXAMPLES.map((ex) => (
+          <button key={ex} type="button" className="hero-demo-chip" onClick={() => tryExample(ex)}>{ex}</button>
+        ))}
+      </div>
+
+      {phase === 'checking' && (
+        <div className="hero-demo-checking">
+          <Loader2 className="loader" size={16} color="var(--accent-color)" /> Running syntax, MX, disposable & mailbox checks…
+        </div>
+      )}
+
+      {phase === 'done' && result && (
+        <div className="hero-demo-result animate-fade-in">
+          <div className="hero-demo-verdict">
+            <StatusIcon status={result.status} />
+            <strong className="hero-demo-email">{email.trim()}</strong>
+            <span className={`badge ${result.status}`}>{result.status.toUpperCase()}</span>
+            <span className="hero-conf">{result.confidence}%</span>
+          </div>
+          <ConfidenceBar value={result.confidence} />
+          <div className="hero-demo-checks">
+            {result.checks.map((c) => (
+              <span key={c.label} className={`hero-demo-check ${c.ok ? 'ok' : 'bad'}`}>
+                {c.ok ? <CheckCircle size={13} /> : <XCircle size={13} />} {c.label}
+              </span>
+            ))}
+          </div>
+          <div className="hero-demo-reason">{result.reason}</div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // --- Landing / Marketing ---
 
 const PLANS = [
@@ -383,20 +612,58 @@ const FaqItem = ({ q, a }) => {
   );
 };
 
-const PublicNav = () => (
-  <div className="public-nav-wrap">
-    <div className="public-nav">
-      <Link to="/" style={{textDecoration:'none'}}><Logo /></Link>
-      <div className="public-nav-links">
-        <a href="#features">Features</a>
-        <a href="#how">How it works</a>
-        <Link to="/pricing">Pricing</Link>
-        <Link to="/login">Login</Link>
-        <Link to="/register" className="btn-primary" style={{width:'auto', padding:'0.55rem 1.2rem'}}>Get Started</Link>
+const PublicNav = () => {
+  const [open, setOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+  const goToSection = useSectionNav();
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Lock body scroll while the mobile menu is open.
+  useEffect(() => {
+    document.body.style.overflow = open ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [open]);
+
+  const anchor = (id) => (e) => {
+    e.preventDefault();
+    setOpen(false);
+    goToSection(id);
+  };
+  const close = () => setOpen(false);
+
+  return (
+    <div className={`public-nav-wrap ${scrolled ? 'scrolled' : ''}`}>
+      <div className="public-nav">
+        <Link to="/" style={{ textDecoration: 'none' }} onClick={close}><Logo /></Link>
+
+        <button
+          className="nav-toggle"
+          aria-label={open ? 'Close menu' : 'Open menu'}
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? <X size={24} /> : <Menu size={24} />}
+        </button>
+
+        <div className={`public-nav-links ${open ? 'open' : ''}`}>
+          <a href="#features" onClick={anchor('features')}>Features</a>
+          <a href="#how" onClick={anchor('how')}>How it works</a>
+          <Link to="/pricing" onClick={close}>Pricing</Link>
+          <Link to="/login" onClick={close}>Login</Link>
+          <Link to="/register" className="btn-primary" style={{ width: 'auto', padding: '0.55rem 1.2rem' }} onClick={close}>Get Started</Link>
+        </div>
+
+        {open && <div className="nav-backdrop" onClick={close} />}
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 const PublicFooter = () => (
   <footer className="public-footer">
@@ -426,82 +693,81 @@ const Landing = () => (
       </div>
       <div className="hero-trust"><CheckCircle2 size={15} color="#059669"/> No credit card required · 100 free verifications</div>
 
-      <div className="hero-card card">
-        <div className="hero-card-head"><MailCheck size={16} color="var(--accent-color)"/> Live verification</div>
-        <div className="hero-card-row"><CheckCircle size={18} color="#059669"/> <strong>john@company.com</strong> <span className="badge valid">VALID</span> <span className="hero-conf">92%</span></div>
-        <div className="hero-card-row"><XCircle size={18} color="#dc2626"/> <strong>info@dead-domain.io</strong> <span className="badge invalid">INVALID</span> <span className="hero-conf">90%</span></div>
-        <div className="hero-card-row"><AlertCircle size={18} color="#d97706"/> <strong>sales@catchall.co</strong> <span className="badge catch-all">CATCH-ALL</span> <span className="hero-conf">40%</span></div>
-      </div>
+      <HeroDemo />
     </section>
 
     <section className="stats-bar">
       {STATS.map((s, i) => (
-        <div key={i} className="stat-item"><div className="stat-value">{s.value}</div><div className="stat-label">{s.label}</div></div>
+        <Reveal key={i} variant="up" delay={i * 90} className="stat-item">
+          <div className="stat-value"><Counter value={s.value} /></div>
+          <div className="stat-label">{s.label}</div>
+        </Reveal>
       ))}
     </section>
 
     <section id="features" className="features-section">
-      <h2 className="section-title">Everything you need to verify email</h2>
-      <p className="section-sub">One tool for real-time checks, bulk lists and CSV cleaning.</p>
+      <Reveal><h2 className="section-title">Everything you need to verify email</h2></Reveal>
+      <Reveal delay={60}><p className="section-sub">One tool for real-time checks, bulk lists and CSV cleaning.</p></Reveal>
       <div className="features-grid">
         {FEATURES.map((f, i) => (
-          <div key={i} className="feature-card card">
+          <Reveal key={i} variant="fade" delay={i * 70} className="feature-card card">
             <div className="feature-icon"><f.icon size={22} color="var(--accent-color)"/></div>
             <div className="feature-title">{f.title}</div>
             <div className="feature-text">{f.text}</div>
-          </div>
+          </Reveal>
         ))}
       </div>
     </section>
 
     <section id="how" className="how-section">
-      <h2 className="section-title">How it works</h2>
-      <p className="section-sub">From messy list to clean inbox-ready data in three steps.</p>
+      <Reveal><h2 className="section-title">How it works</h2></Reveal>
+      <Reveal delay={60}><p className="section-sub">From messy list to clean inbox-ready data in three steps.</p></Reveal>
       <div className="steps-grid">
-        {STEPS.map((s) => (
-          <div key={s.n} className="step-card">
+        {STEPS.map((s, i) => (
+          <Reveal key={s.n} variant="up" delay={i * 110} className="step-card">
             <div className="step-num">{s.n}</div>
             <div className="feature-title">{s.title}</div>
             <div className="feature-text">{s.text}</div>
-          </div>
+          </Reveal>
         ))}
       </div>
     </section>
 
     <section className="testi-section">
-      <h2 className="section-title">Loved by senders</h2>
+      <Reveal><h2 className="section-title">Loved by senders</h2></Reveal>
       <div className="testi-grid">
         {TESTIMONIALS.map((t, i) => (
-          <div key={i} className="testi-card card">
+          <Reveal key={i} variant="up" delay={i * 90} className="testi-card card">
             <p className="testi-quote">“{t.quote}”</p>
             <div className="testi-author"><div className="testi-avatar">{t.name.charAt(0)}</div><div><strong>{t.name}</strong><div className="testi-role">{t.role}</div></div></div>
-          </div>
+          </Reveal>
         ))}
       </div>
     </section>
 
     <section id="pricing" className="pricing-section">
-      <h2 className="section-title">Simple, transparent pricing</h2>
-      <p className="section-sub">Start free. Upgrade when you grow.</p>
+      <Reveal><h2 className="section-title">Simple, transparent pricing</h2></Reveal>
+      <Reveal delay={60}><p className="section-sub">Start free. Upgrade when you grow.</p></Reveal>
       <PricingCards />
     </section>
 
     <section className="faq-section">
-      <h2 className="section-title">Frequently asked questions</h2>
+      <Reveal><h2 className="section-title">Frequently asked questions</h2></Reveal>
       <div className="faq-list">
         {FAQS.map((f, i) => <FaqItem key={i} q={f.q} a={f.a} />)}
       </div>
     </section>
 
     <section className="cta-section">
-      <div className="cta-inner">
+      <Reveal className="cta-inner" variant="up">
         <h2>Ready to clean your list?</h2>
         <p>Get 100 free verifications — no credit card required.</p>
         <Link to="/register" className="btn-primary" style={{width:'auto', padding:'0.9rem 2rem', background:'#fff', color:'var(--accent-color)'}}>Get started free <ArrowRight size={18}/></Link>
-      </div>
+      </Reveal>
     </section>
 
     <PublicFooter />
+    <BackToTop />
   </div>
 );
 
@@ -509,15 +775,16 @@ const PricingPage = () => (
   <div className="public-page animate-fade-in">
     <PublicNav />
     <section className="pricing-section" style={{paddingTop:'3.5rem'}}>
-      <h2 className="section-title">Pricing</h2>
-      <p className="section-sub">Choose the plan that fits your volume. Cancel anytime.</p>
+      <Reveal><h2 className="section-title">Pricing</h2></Reveal>
+      <Reveal delay={60}><p className="section-sub">Choose the plan that fits your volume. Cancel anytime.</p></Reveal>
       <PricingCards />
     </section>
     <section className="faq-section">
-      <h2 className="section-title">Questions</h2>
+      <Reveal><h2 className="section-title">Questions</h2></Reveal>
       <div className="faq-list">{FAQS.map((f, i) => <FaqItem key={i} q={f.q} a={f.a} />)}</div>
     </section>
     <PublicFooter />
+    <BackToTop />
   </div>
 );
 
@@ -842,17 +1109,22 @@ const DashboardHome = () => {
 // --- Legal Pages ---
 
 const LegalPage = ({ icon: Icon, title, children }) => (
-  <div className="legal-page animate-fade-in">
-    <div className="legal-container">
-      <Link to="/login" className="legal-back"><ChevronRight size={16} style={{transform:'rotate(180deg)'}}/> Back to app</Link>
-      <div className="legal-heading">
-        <Icon size={30} color="var(--accent-color)" />
-        <h1>{title}</h1>
+  <div className="public-page animate-fade-in">
+    <PublicNav />
+    <div className="legal-page">
+      <div className="legal-container">
+        <Link to="/" className="legal-back"><ChevronRight size={16} style={{transform:'rotate(180deg)'}}/> Back to home</Link>
+        <div className="legal-heading">
+          <Icon size={30} color="var(--accent-color)" />
+          <h1>{title}</h1>
+        </div>
+        <div className="legal-meta">Effective date: {BRAND.effectiveDate} · {BRAND.name}</div>
+        <div className="legal-body">{children}</div>
+        <div className="legal-footer-nav"><LegalLinks /></div>
       </div>
-      <div className="legal-meta">Effective date: {BRAND.effectiveDate} · {BRAND.name}</div>
-      <div className="legal-body">{children}</div>
-      <div className="legal-footer-nav"><LegalLinks /></div>
     </div>
+    <PublicFooter />
+    <BackToTop />
   </div>
 );
 
