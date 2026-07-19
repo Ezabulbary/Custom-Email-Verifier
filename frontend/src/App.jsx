@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
-import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Sparkles, Star, Quote } from 'lucide-react';
+import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Star, Quote, Phone } from 'lucide-react';
 import './App.css';
 import { googleSignIn, isFirebaseConfigured } from './firebase';
 
@@ -19,6 +19,9 @@ const BRAND = {
   contact: 'privacy@yourdomain.com',
   site: 'yourdomain.com',
   effectiveDate: 'July 2026',
+  // Scheduling link for the "Book a quick call" buttons. Replace with your real
+  // Calendly / Cal.com / Google Calendar booking URL.
+  callUrl: 'https://calendly.com/your-team/15min',
 };
 
 // --- Logo (envelope + green check + motion lines) ---
@@ -429,125 +432,6 @@ const BackToTop = () => {
   );
 };
 
-// --- Client-side instant checker used by the hero demo ---
-const DEMO_DISPOSABLE = ['mailinator.com', 'tempmail.com', '10minutemail.com', 'guerrillamail.com', 'yopmail.com', 'trashmail.com', 'sharklasers.com', 'getnada.com', 'temp-mail.org', 'throwaway.email'];
-const DEMO_ROLE = ['info', 'admin', 'support', 'sales', 'contact', 'noreply', 'no-reply', 'hello', 'team'];
-const DEMO_EXAMPLES = ['john@company.com', 'info@mailinator.com', 'not-an-email'];
-
-const analyzeEmail = (raw) => {
-  const email = (raw || '').trim().toLowerCase();
-  const syntaxOk = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email);
-  const [local, domain] = syntaxOk ? email.split('@') : ['', ''];
-  const disposable = syntaxOk && DEMO_DISPOSABLE.includes(domain);
-  const roleBased = syntaxOk && DEMO_ROLE.includes(local);
-
-  let status, confidence, reason;
-  if (!syntaxOk) {
-    status = 'invalid'; confidence = 97; reason = 'Malformed address — failed syntax validation.';
-  } else if (disposable) {
-    status = 'invalid'; confidence = 93; reason = 'Disposable / throwaway email provider.';
-  } else if (roleBased) {
-    status = 'catch-all'; confidence = 55; reason = 'Role-based mailbox — deliverability is uncertain.';
-  } else {
-    status = 'valid'; confidence = 92; reason = 'Valid syntax, live domain and a reachable mailbox.';
-  }
-
-  return {
-    status, confidence, reason,
-    checks: [
-      { label: 'Syntax', ok: syntaxOk },
-      { label: 'MX record', ok: syntaxOk && !disposable },
-      { label: 'Not disposable', ok: syntaxOk && !disposable },
-      { label: 'Mailbox', ok: status === 'valid' },
-    ],
-  };
-};
-
-const HeroDemo = () => {
-  const [email, setEmail] = useState('john@company.com');
-  const [phase, setPhase] = useState('idle'); // idle | checking | done
-  const [result, setResult] = useState(null);
-  const timers = useRef([]);
-
-  const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
-  useEffect(() => clearTimers, []);
-
-  const verify = (value) => {
-    const target = (value ?? email).trim();
-    if (!target || phase === 'checking') return;
-    clearTimers();
-    setResult(null);
-    setPhase('checking');
-    timers.current.push(setTimeout(() => {
-      setResult(analyzeEmail(target));
-      setPhase('done');
-    }, 1050));
-  };
-
-  const tryExample = (ex) => { setEmail(ex); verify(ex); };
-
-  return (
-    <div className="hero-card card">
-      <div className="hero-card-head">
-        <MailCheck size={16} color="var(--accent-color)" /> Live verification
-        <span className="hero-demo-tag"><Sparkles size={12} /> Try it</span>
-      </div>
-
-      <form
-        className="hero-demo-form"
-        onSubmit={(e) => { e.preventDefault(); verify(); }}
-      >
-        <input
-          type="text"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="hero-demo-input"
-          placeholder="you@example.com"
-          aria-label="Email to verify"
-          spellCheck={false}
-        />
-        <button type="submit" className="btn-primary hero-demo-btn" disabled={phase === 'checking'}>
-          {phase === 'checking' ? <Loader2 className="loader" size={16} /> : <Search size={16} />}
-          <span className="hero-demo-btn-label">Verify</span>
-        </button>
-      </form>
-
-      <div className="hero-demo-examples">
-        <span>Try:</span>
-        {DEMO_EXAMPLES.map((ex) => (
-          <button key={ex} type="button" className="hero-demo-chip" onClick={() => tryExample(ex)}>{ex}</button>
-        ))}
-      </div>
-
-      {phase === 'checking' && (
-        <div className="hero-demo-checking">
-          <Loader2 className="loader" size={16} color="var(--accent-color)" /> Running syntax, MX, disposable & mailbox checks…
-        </div>
-      )}
-
-      {phase === 'done' && result && (
-        <div className="hero-demo-result animate-fade-in">
-          <div className="hero-demo-verdict">
-            <StatusIcon status={result.status} />
-            <strong className="hero-demo-email">{email.trim()}</strong>
-            <span className={`badge ${result.status}`}>{result.status.toUpperCase()}</span>
-            <span className="hero-conf">{result.confidence}%</span>
-          </div>
-          <ConfidenceBar value={result.confidence} />
-          <div className="hero-demo-checks">
-            {result.checks.map((c) => (
-              <span key={c.label} className={`hero-demo-check ${c.ok ? 'ok' : 'bad'}`}>
-                {c.ok ? <CheckCircle size={13} /> : <XCircle size={13} />} {c.label}
-              </span>
-            ))}
-          </div>
-          <div className="hero-demo-reason">{result.reason}</div>
-        </div>
-      )}
-    </div>
-  );
-};
-
 // --- Landing / Marketing ---
 
 const PLANS = [
@@ -588,10 +472,23 @@ const TESTIMONIALS = [
 ];
 
 const FAQS = [
-  { q: 'What does a verification actually check?', a: 'Every address goes through syntax validation, MX lookup, SMTP mailbox probing, disposable-domain detection and catch-all analysis — returning a status and a 0–100 confidence score.' },
-  { q: 'How do you handle catch-all domains?', a: 'We send multiple probes and compare the server responses, and for Microsoft 365 we run a deep mailbox check — so even accept-all domains get a meaningful confidence score.' },
+  { q: 'What does a verification actually check?', a: 'Every address goes through syntax validation, MX lookup, SMTP mailbox probing, disposable-domain detection and catch-all analysis — returning a status (valid, invalid, catch-all or unknown) and a 0–100 confidence score.' },
+  { q: 'What do the statuses mean?', a: 'Valid = the mailbox exists and can receive mail. Invalid = it does not exist or the domain rejects mail. Catch-all = the domain accepts every address, so we return a confidence score instead of a guarantee. Unknown = the server did not give a definitive answer (greylisting, timeouts).' },
+  { q: 'How accurate is BounceCure?', a: 'For domains that expose a mailbox, accuracy is typically 98–99%. Catch-all and unknown results reflect genuine limits of the SMTP protocol — no verifier can be 100% certain on those, which is exactly why we return a confidence score rather than a false “valid”.' },
+  { q: 'How do you handle catch-all domains?', a: 'We send multiple probes and compare the server responses, and for Microsoft 365 tenants we run a deep mailbox check — so even accept-all domains get a meaningful confidence score instead of a blind “valid”.' },
+  { q: 'Will verifying send an email to the address?', a: 'No. We talk to the mail server up to the point of checking the mailbox and then disconnect before any message is sent. Recipients never receive anything.' },
+  { q: 'How fast is it and can I verify in bulk?', a: 'Single checks usually complete in under two seconds. You can paste a list or upload a CSV for bulk verification, and results stream back as each address is processed.' },
+  { q: 'What file formats do you support for lists?', a: 'CSV files with one email per row (with or without a header). After processing you can export a clean CSV with the status, confidence and full details for every address.' },
+  { q: 'Does verifying improve my deliverability?', a: 'Yes. Removing invalid and risky addresses lowers your bounce rate, protects your sender reputation, and keeps you out of spam traps — which means more of your email reaches the inbox.' },
+  { q: 'How many free credits do I get?', a: 'Every new account starts with 100 free verification credits — no credit card required. One credit = one verified address.' },
   { q: 'Do credits expire?', a: 'Free credits never expire. Paid plans renew monthly with a fresh allocation of credits.' },
-  { q: 'Is my data safe?', a: 'Passwords are hashed, traffic is encrypted, and verification history is automatically deleted after 30 days. See our Privacy Policy and GDPR page.' },
+  { q: 'Can I sign in with Google?', a: 'Yes. You can create your account or log in with “Continue with Google”, or use a regular email and password — whichever you prefer.' },
+  { q: 'I forgot my password — what do I do?', a: 'On the login page click “Forgot password?”, enter your email, and we will send you a secure link to set a new password. If you signed up with Google, just use “Continue with Google” instead.' },
+  { q: 'Is there an API?', a: 'A REST API is on the roadmap for the Pro plan so you can verify addresses directly from your app or signup form in real time. Contact us if you would like early access.' },
+  { q: 'Is my data safe and private?', a: 'Passwords are hashed with bcrypt, all traffic is encrypted over TLS, we never sell your data, and verification history is automatically deleted after 30 days. See our Privacy Policy and GDPR page for details.' },
+  { q: 'Do you store the lists I upload?', a: 'Only your results are kept, and only for 30 days so you can re-export them — after that they are deleted automatically. You can also request deletion at any time.' },
+  { q: 'Can I cancel or get a refund?', a: 'You can cancel anytime and keep access until the end of your billing period. Unused credits are non-refundable, but there is no long-term contract.' },
+  { q: 'Still have questions?', a: 'Book a quick call with us or email support — we are happy to walk you through how BounceCure fits your workflow.' },
 ];
 
 const PricingCards = () => (
@@ -675,7 +572,7 @@ const PublicNav = () => {
             <a href="/" onClick={goHome}>Home</a>
             <a href="#features" onClick={anchor('features')}>Features</a>
             <a href="#how" onClick={anchor('how')}>How it works</a>
-            <Link to="/pricing" onClick={close}>Pricing</Link>
+            <a href="#pricing" onClick={anchor('pricing')}>Pricing</a>
           </nav>
           <div className="nav-actions">
             <Link to="/login" className="nav-login" onClick={close}>Login</Link>
@@ -708,7 +605,7 @@ const PublicFooter = () => {
           <h4>Product</h4>
           <a href="#features" onClick={anchor('features')}>Features</a>
           <a href="#how" onClick={anchor('how')}>How it works</a>
-          <Link to="/pricing">Pricing</Link>
+          <a href="#pricing" onClick={anchor('pricing')}>Pricing</a>
         </div>
 
         <div className="footer-col">
@@ -745,11 +642,9 @@ const Landing = () => (
       <p>{BRAND.name} checks syntax, MX, SMTP mailbox, disposable and catch-all — with a confidence score for every address — so your emails reach real inboxes.</p>
       <div className="hero-cta">
         <Link to="/register" className="btn-primary" style={{width:'auto', padding:'0.9rem 1.7rem'}}>Start free — 100 credits <ArrowRight size={18}/></Link>
-        <Link to="/pricing" className="btn-secondary" style={{padding:'0.9rem 1.7rem'}}>View pricing</Link>
+        <a href="#pricing" className="btn-secondary" style={{padding:'0.9rem 1.7rem', textDecoration:'none'}}>View pricing</a>
       </div>
       <div className="hero-trust"><CheckCircle2 size={15} color="#059669"/> No credit card required · 100 free verifications</div>
-
-      <HeroDemo />
     </section>
 
     <section className="stats-bar">
@@ -818,11 +713,21 @@ const Landing = () => (
       </div>
     </section>
 
-    <section className="faq-section">
+    <section id="faq" className="faq-section">
       <Reveal><h2 className="section-title">Frequently asked questions</h2></Reveal>
+      <Reveal delay={60}><p className="section-sub">Everything you need to know. Can’t find an answer? Book a quick call.</p></Reveal>
       <div className="faq-list">
         {FAQS.map((f, i) => <FaqItem key={i} q={f.q} a={f.a} />)}
       </div>
+      <Reveal className="faq-call" variant="up">
+        <div className="faq-call-text">
+          <strong>Still have questions?</strong>
+          <span>Talk to a human — grab a free 15-minute call and we’ll help you get set up.</span>
+        </div>
+        <a href={BRAND.callUrl} target="_blank" rel="noopener noreferrer" className="btn-primary faq-call-btn">
+          <Phone size={17} /> Book a quick call
+        </a>
+      </Reveal>
     </section>
 
     <section className="cta-section">
@@ -833,23 +738,6 @@ const Landing = () => (
       </Reveal>
     </section>
 
-    <PublicFooter />
-    <BackToTop />
-  </div>
-);
-
-const PricingPage = () => (
-  <div className="public-page animate-fade-in">
-    <PublicNav />
-    <section className="pricing-section" style={{paddingTop:'3.5rem'}}>
-      <Reveal><h2 className="section-title">Pricing</h2></Reveal>
-      <Reveal delay={60}><p className="section-sub">Choose the plan that fits your volume. Cancel anytime.</p></Reveal>
-      <PricingCards />
-    </section>
-    <section className="faq-section">
-      <Reveal><h2 className="section-title">Questions</h2></Reveal>
-      <div className="faq-list">{FAQS.map((f, i) => <FaqItem key={i} q={f.q} a={f.a} />)}</div>
-    </section>
     <PublicFooter />
     <BackToTop />
   </div>
@@ -910,7 +798,7 @@ const AuthShell = ({ title, subtitle, error, children, alt, reverse, brandTitle,
         </aside>
 
         <div className="auth-form-side">
-          <div className="auth-card animate-fade-in">
+          <div className="auth-card">
             <div className="auth-title">{title}</div>
             <div className="auth-subtitle">{subtitle}</div>
 
@@ -972,10 +860,117 @@ const Login = () => {
       <form onSubmit={handleSubmit} className="form-group">
         <label>Email</label>
         <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="input-field" placeholder="you@company.com" required />
-        <label>Password</label>
+        <div className="label-row">
+          <label>Password</label>
+          <Link to="/forgot-password" className="forgot-link">Forgot password?</Link>
+        </div>
         <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" placeholder="••••••••" required />
         <button type="submit" className="btn-primary" style={{marginTop:'1rem'}}>Sign In</button>
       </form>
+    </AuthShell>
+  );
+};
+
+// Request a reset link.
+const ForgotPassword = () => {
+  const [email, setEmail] = useState('');
+  const [error, setError] = useState('');
+  const [sent, setSent] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const data = await apiFetch('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+      if (data.error) throw new Error(data.error);
+      setSent(true);
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <AuthShell
+      title="Reset your password"
+      subtitle="We’ll email you a secure link to set a new one"
+      error={error}
+      brandTitle="Forgot your password?"
+      brandText="No problem. Enter your email and we’ll send you a link to get back into your account."
+      alt={<>Remembered it? <Link to="/login">Back to login</Link></>}
+    >
+      {sent ? (
+        <div className="auth-success">
+          <CheckCircle2 size={20} color="#059669" />
+          <div>If an account exists for <strong>{email}</strong>, a password-reset link is on its way. Check your inbox (and spam).</div>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="form-group">
+          <label>Email</label>
+          <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="input-field" placeholder="you@company.com" required />
+          <button type="submit" className="btn-primary" style={{marginTop:'1rem'}} disabled={loading}>
+            {loading ? <Loader2 className="loader" size={18} /> : null} Send reset link
+          </button>
+        </form>
+      )}
+    </AuthShell>
+  );
+};
+
+// Set a new password using the token from the emailed link.
+const ResetPassword = () => {
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const token = new URLSearchParams(location.search).get('token') || '';
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!token) { setError('This reset link is invalid or has expired. Request a new one.'); return; }
+    setLoading(true);
+    try {
+      const data = await apiFetch('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) });
+      if (data.error) throw new Error(data.error);
+      setDone(true);
+      setTimeout(() => navigate('/login'), 1800);
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <AuthShell
+      title="Choose a new password"
+      subtitle="Enter a new password for your account"
+      error={error}
+      brandTitle="Almost there."
+      brandText="Pick a strong new password and you’ll be back to verifying in seconds."
+      alt={<>Changed your mind? <Link to="/login">Back to login</Link></>}
+    >
+      {done ? (
+        <div className="auth-success">
+          <CheckCircle2 size={20} color="#059669" />
+          <div>Password updated! Redirecting you to login…</div>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="form-group">
+          <label>New password</label>
+          <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" placeholder="At least 8 characters" required minLength={8} />
+          <span style={{fontSize:'0.8rem', color:'var(--text-secondary)'}}>At least 8 characters.</span>
+          <button type="submit" className="btn-primary" style={{marginTop:'1rem'}} disabled={loading}>
+            {loading ? <Loader2 className="loader" size={18} /> : null} Update password
+          </button>
+        </form>
+      )}
     </AuthShell>
   );
 };
@@ -1516,9 +1511,11 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<Landing />} />
-      <Route path="/pricing" element={<PricingPage />} />
+      <Route path="/pricing" element={<Navigate to="/#pricing" replace />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route path="/terms" element={<TermsOfService />} />
       <Route path="/cookies" element={<CookiePolicy />} />

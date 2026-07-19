@@ -93,7 +93,19 @@ You asked about Firebase for users and Cloudinary for work history. Here's the p
 
 ---
 
-## 5. Production checklist
+## 5. Password reset & "Book a call"
+
+**Forgot password** works out of the box for email/password accounts:
+1. User clicks *Forgot password?* → enters email → backend stores a single-use,
+   1-hour token (hashed) and generates a reset link `FRONTEND_URL/reset-password?token=…`.
+2. In **development** the link is printed to the backend console so you can test.
+3. In **production**, wire your email provider (SendGrid, SES, nodemailer/SMTP…)
+   inside `deliverResetEmail()` in `server.js`, and set `FRONTEND_URL`.
+
+**Book a quick call:** the "Book a quick call" buttons open `BRAND.callUrl` in
+`frontend/src/App.jsx`. Replace it with your real Calendly / Cal.com booking link.
+
+## 6. Production checklist
 - Set `NODE_ENV=production` and a strong `JWT_SECRET` (`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`).
 - Set `CORS_ORIGINS=https://your-frontend-domain`.
 - Set `VITE_API_URL` to your API origin and rebuild the frontend (`npm run build`).

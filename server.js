@@ -169,6 +169,75 @@ app.post('/auth/google', async (req, res) => {
     });
 });
 
+// Front-end origin used to build the reset link in the email.
+const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+
+// Single place that "sends" the reset email. Wire your email provider here
+// (nodemailer/SendGrid/etc). Until then, in non-production we log the link so
+// you can test the flow locally.
+function deliverResetEmail(email, link) {
+    if (process.env.NODE_ENV === 'production') {
+        // TODO: integrate a real email provider here.
+        console.log(`[Reset] (production) reset link generated for ${email} — wire an email provider in deliverResetEmail().`);
+    } else {
+        console.log(`\n[Reset] Password-reset link for ${email}:\n  ${link}\n`);
+    }
+}
+
+// Request a password reset. Always responds success (no account enumeration).
+app.post('/auth/forgot-password', (req, res) => {
+    const email = (req.body && req.body.email || '').trim().toLowerCase();
+    const ok = () => res.json({ success: true });
+    if (!email || !EMAIL_RE.test(email)) return ok();
+
+    db.get(`SELECT * FROM users WHERE lower(email) = ?`, [email], (err, user) => {
+        // Only send for real accounts that use a password (not Google-only).
+        if (err || !user || !user.password) return ok();
+
+        const token = crypto.randomBytes(32).toString('hex');
+        const tokenHash = sha256(token);
+        const expiresAt = Date.now() + RESET_TTL_MS;
+
+        db.run(`INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, ?)`,
+            [user.id, tokenHash, expiresAt], (insErr) => {
+                if (!insErr) {
+                    deliverResetEmail(user.email, `${FRONTEND_URL}/reset-password?token=${token}`);
+                }
+                return ok(); // respond success either way
+            });
+    });
+});
+
+// Complete a password reset using the emailed token.
+app.post('/auth/reset-password', (req, res) => {
+    const { token, password } = req.body || {};
+    if (!token || typeof token !== 'string') return res.status(400).json({ error: 'Invalid reset link' });
+    if (typeof password !== 'string' || password.length < 8 || password.length > 200) {
+        return res.status(400).json({ error: 'Password must be between 8 and 200 characters' });
+    }
+
+    const tokenHash = sha256(token);
+    db.get(`SELECT * FROM password_resets WHERE token_hash = ? AND used = 0`, [tokenHash], (err, row) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        if (!row || row.expires_at < Date.now()) {
+            return res.status(400).json({ error: 'This reset link is invalid or has expired. Request a new one.' });
+        }
+
+        bcrypt.hash(password, 10, (hErr, hash) => {
+            if (hErr) return res.status(500).json({ error: 'Server error' });
+            db.run(`UPDATE users SET password = ? WHERE id = ?`, [hash, row.user_id], (uErr) => {
+                if (uErr) return res.status(500).json({ error: 'Database error' });
+                // Consume this token and invalidate any other outstanding ones.
+                db.run(`UPDATE password_resets SET used = 1 WHERE user_id = ?`, [row.user_id]);
+                res.json({ success: true });
+            });
+        });
+    });
+});
+
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];

@@ -81,6 +81,39 @@
 .auth-legal-note a { color: var(--text-secondary); text-decoration: underline; }
 .auth-legal-note a:hover { color: var(--accent-color); }
 
+/* Forgot-password link + success state */
+.label-row { display: flex; align-items: center; justify-content: space-between; }
+.forgot-link { font-size: 0.82rem; color: var(--accent-color); font-weight: 600; text-decoration: none; }
+.forgot-link:hover { text-decoration: underline; }
+.auth-success {
+  display: flex; align-items: flex-start; gap: 0.6rem;
+  background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46;
+  padding: 1rem 1.1rem; border-radius: 12px; font-size: 0.92rem; line-height: 1.5;
+}
+.auth-success strong { color: #065f46; }
+
+/* Smooth entrance/transition between auth pages (login ⇄ register ⇄ reset).
+   The form slides in from its own side so switching pages feels like the two
+   halves swap. */
+.auth-card { animation: authCardR 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.auth-split.reverse .auth-card { animation-name: authCardL; }
+@keyframes authCardR {
+  from { opacity: 0; transform: translateX(28px) scale(0.99); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes authCardL {
+  from { opacity: 0; transform: translateX(-28px) scale(0.99); }
+  to   { opacity: 1; transform: none; }
+}
+.auth-brand-inner { animation: authBrandIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes authBrandIn {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-card, .auth-brand-inner { animation: none; }
+}
+
 /* Dashboard Layout */
 .dashboard-container {
   display: flex;
@@ -512,16 +545,7 @@
 .hero > p { font-size: 1.2rem; color: var(--text-secondary); max-width: 620px; margin: 0 auto 2rem; line-height: 1.6; }
 .hero-cta { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; margin-bottom: 1rem; }
 .hero-cta a { text-decoration: none; }
-.hero-trust { color: var(--text-secondary); font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.4rem; margin-bottom: 3rem; }
-.hero-card { max-width: 520px; margin: 0 auto; padding: 0.5rem 1.25rem 1rem; text-align: left; box-shadow: var(--shadow-lg); }
-.hero-card-head { display: flex; align-items: center; gap: 0.45rem; padding: 0.85rem 0.25rem; font-weight: 600; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 1px solid var(--border-color); }
-.hero-card-row {
-  display: flex; align-items: center; gap: 0.6rem; padding: 0.75rem 0.25rem;
-  border-bottom: 1px solid var(--border-color); font-size: 0.95rem;
-}
-.hero-card-row:last-child { border-bottom: none; }
-.hero-card-row .badge { margin-left: auto; }
-.hero-conf { color: var(--text-secondary); font-size: 0.85rem; min-width: 34px; text-align: right; }
+.hero-trust { color: var(--text-secondary); font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.4rem; margin-bottom: 1rem; }
 
 /* Stats bar */
 .stats-bar {
@@ -606,6 +630,18 @@
 .faq-item.open .faq-chevron { transform: rotate(180deg); }
 .faq-a { color: var(--text-secondary); line-height: 1.6; margin-top: 0.8rem; font-size: 0.95rem; }
 
+/* "Still have questions? Book a call" */
+.faq-call {
+  margin-top: 2rem; display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 1.25rem;
+  background: linear-gradient(135deg, #eef2ff, #faf5ff);
+  border: 1px solid #e0e7ff; border-radius: 16px; padding: 1.5rem 1.75rem;
+}
+.faq-call-text { display: flex; flex-direction: column; gap: 0.2rem; }
+.faq-call-text strong { font-size: 1.05rem; }
+.faq-call-text span { color: var(--text-secondary); font-size: 0.92rem; }
+.faq-call-btn { width: auto; padding: 0.7rem 1.35rem; text-decoration: none; flex-shrink: 0; }
+
 /* CTA */
 .cta-section { padding: 1rem 2rem 4rem; }
 .cta-inner {
@@ -674,47 +710,6 @@
 .reveal-up { transform: translateY(26px); }
 .reveal-fade { transform: none; }
 .reveal.in-view { opacity: 1; transform: none; }
-
-/* --- Interactive hero demo --- */
-.hero-demo-tag {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 0.25rem;
-  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase;
-  color: var(--accent-color); background: #eef2ff; border: 1px solid #e0e7ff;
-  padding: 0.15rem 0.55rem; border-radius: 99px;
-}
-.hero-demo-form { display: flex; gap: 0.5rem; padding: 0.9rem 0.25rem 0.6rem; }
-.hero-demo-input {
-  flex: 1; min-width: 0; padding: 0.7rem 0.9rem; border-radius: 10px;
-  border: 1px solid #cbd5e1; font-size: 0.95rem; outline: none; background: #fff;
-}
-.hero-demo-input:focus { border-color: var(--accent-color); box-shadow: 0 0 0 3px rgba(79,70,229,0.18); }
-.hero-demo-btn { width: auto; padding: 0.7rem 1.1rem; flex-shrink: 0; }
-.hero-demo-examples {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
-  padding: 0 0.25rem 0.5rem; font-size: 0.8rem; color: var(--text-secondary);
-}
-.hero-demo-chip {
-  font-size: 0.78rem; color: var(--text-secondary); background: var(--bg-surface-hover);
-  border: 1px solid var(--border-color); padding: 0.2rem 0.6rem; border-radius: 99px;
-  font-family: inherit; transition: all 0.15s ease;
-}
-.hero-demo-chip:hover { border-color: var(--accent-color); color: var(--accent-color); background: #eef2ff; }
-.hero-demo-checking {
-  display: flex; align-items: center; gap: 0.5rem; padding: 0.85rem 0.25rem 0.5rem;
-  font-size: 0.88rem; color: var(--text-secondary);
-}
-.hero-demo-result { padding: 0.5rem 0.25rem 0.4rem; border-top: 1px solid var(--border-color); margin-top: 0.4rem; }
-.hero-demo-verdict { display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.7rem; }
-.hero-demo-email { font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hero-demo-verdict .badge { margin-left: auto; }
-.hero-demo-checks { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.8rem; }
-.hero-demo-check {
-  display: inline-flex; align-items: center; gap: 0.28rem;
-  font-size: 0.76rem; font-weight: 600; padding: 0.22rem 0.55rem; border-radius: 99px;
-}
-.hero-demo-check.ok { background: #d1fae5; color: #059669; }
-.hero-demo-check.bad { background: #fee2e2; color: #dc2626; }
-.hero-demo-reason { margin-top: 0.7rem; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; }
 
 /* --- Back to top --- */
 .back-to-top {
