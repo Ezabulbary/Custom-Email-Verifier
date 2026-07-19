@@ -112,6 +112,16 @@ const apiFetch = async (endpoint, options = {}) => {
   return response.json();
 };
 
+// Turn a raw fetch/API failure into a message a person can act on. The most
+// common cause in dev is the backend API not running on API_URL.
+const friendlyError = (err) => {
+  const m = (err && err.message) || '';
+  if (m === 'Failed to fetch' || m === 'Load failed' || /NetworkError|ERR_CONNECTION/i.test(m)) {
+    return 'Cannot reach the server. Make sure the backend API is running (node server.js).';
+  }
+  return m || 'Something went wrong. Please try again.';
+};
+
 // --- Shared bits ---
 
 const LegalLinks = () => (
@@ -665,18 +675,50 @@ const PublicNav = () => {
   );
 };
 
-const PublicFooter = () => (
-  <footer className="public-footer">
-    <div className="public-footer-inner">
-      <div className="footer-brand">
-        <Logo />
-        <p>{BRAND.tagline}</p>
+const PublicFooter = () => {
+  const goToSection = useSectionNav();
+  const anchor = (id) => (e) => { e.preventDefault(); goToSection(id); };
+  const year = BRAND.effectiveDate.split(' ').pop();
+
+  return (
+    <footer className="public-footer">
+      <div className="footer-glow" />
+      <div className="public-footer-inner">
+        <div className="footer-brand">
+          <Logo light />
+          <p className="footer-tagline">{BRAND.tagline}</p>
+          <span className="footer-status"><span className="footer-status-dot" /> All systems operational</span>
+        </div>
+
+        <div className="footer-col">
+          <h4>Product</h4>
+          <a href="#features" onClick={anchor('features')}>Features</a>
+          <a href="#how" onClick={anchor('how')}>How it works</a>
+          <Link to="/pricing">Pricing</Link>
+        </div>
+
+        <div className="footer-col">
+          <h4>Legal</h4>
+          <Link to="/privacy">Privacy Policy</Link>
+          <Link to="/terms">Terms of Service</Link>
+          <Link to="/cookies">Cookie Policy</Link>
+          <Link to="/gdpr">GDPR</Link>
+        </div>
+
+        <div className="footer-cta">
+          <h4>Start in seconds</h4>
+          <p>Create a free account and get 100 verifications — no card required.</p>
+          <Link to="/register" className="footer-cta-btn">Create free account <ArrowRight size={16} /></Link>
+        </div>
       </div>
-      <LegalLinks />
-    </div>
-    <div className="public-footer-copy">© {BRAND.effectiveDate.split(' ').pop()} {BRAND.name}. All rights reserved.</div>
-  </footer>
-);
+
+      <div className="public-footer-copy">
+        <span>© {year} {BRAND.name}. All rights reserved.</span>
+        <span className="footer-made"><MailCheck size={14} /> Built for deliverability</span>
+      </div>
+    </footer>
+  );
+};
 
 const Landing = () => (
   <div className="public-page animate-fade-in">
@@ -819,7 +861,7 @@ const Login = () => {
       login(data.token, data.user);
       navigate('/dashboard');
     } catch (err) {
-      setError(err.message || 'Login failed');
+      setError(friendlyError(err));
     }
   };
 
@@ -873,7 +915,7 @@ const Register = () => {
       alert('Registration successful! Please login.');
       navigate('/login');
     } catch (err) {
-      setError(err.message || 'Registration failed');
+      setError(friendlyError(err));
     }
   };
 
