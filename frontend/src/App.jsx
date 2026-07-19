@@ -304,7 +304,10 @@ const HistoryPanel = ({ type, version }) => {
         </table>
       )}
     </div>
-  );// --- Landing / Marketing ---
+  );
+};
+
+// --- Landing / Marketing ---
 
 const PLANS = [
   { name: 'Free', price: '0', period: 'forever', credits: '100 credits', highlight: false,
