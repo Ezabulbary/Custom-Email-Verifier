@@ -19,7 +19,6 @@ const BRAND = {
   site: 'yourdomain.com',
   effectiveDate: 'July 2026',
 };
-
 // --- Logo (envelope + green check + motion lines) ---
 const LogoMark = ({ size = 30, light = false }) => {
   const line = light ? 'rgba(255,255,255,0.5)' : '#cdd0f7';
@@ -305,10 +304,7 @@ const HistoryPanel = ({ type, version }) => {
         </table>
       )}
     </div>
-  );
-};
-
-// --- Landing / Marketing ---
+  );// --- Landing / Marketing ---
 
 const PLANS = [
   { name: 'Free', price: '0', period: 'forever', credits: '100 credits', highlight: false,
@@ -520,7 +516,6 @@ const PricingPage = () => (
     <PublicFooter />
   </div>
 );
-
 // --- Pages ---
 
 const Login = () => {
@@ -1098,6 +1093,19 @@ const AdminPanel = () => {
           </div>
         )}
       </div>
+
+      {stats && totalEmails > 0 && (
+        <div className="card" style={{padding:'2rem', marginTop:'1.5rem'}}>
+          <div style={{fontWeight:600, marginBottom:'1rem'}}>Last 30 days breakdown</div>
+          <div className="pill-row" style={{gap:'0.75rem'}}>
+            <CountPill label="Valid" value={stats.counts.valid} cls="valid" />
+            <CountPill label="Invalid" value={stats.counts.invalid} cls="invalid" />
+            <CountPill label="Catch-all" value={stats.counts.catchAll} cls="catch-all" />
+            <CountPill label="Unknown" value={stats.counts.unknown} cls="unknown" />
+            <span className="count-pill" style={{marginLeft:'auto'}}>Executions: <strong>{stats.executions}</strong></span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

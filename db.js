@@ -25,7 +25,6 @@ db.serialize(() => {
     // error when the column already exists is ignored.
     db.run(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`, () => {});
     db.run(`ALTER TABLE users ADD COLUMN created_at TEXT`, () => {});
-
     // Per-execution verification history (retained for ~1 month).
     db.run(`CREATE TABLE IF NOT EXISTS history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -68,7 +68,6 @@ if (ADMIN_EMAIL) {
         if (!err && this.changes > 0) console.log(`[Admin] ${ADMIN_EMAIL} promoted to admin.`);
     });
 }
-
 app.post('/auth/register', (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
@@ -464,7 +463,6 @@ app.delete('/admin/users/:id', authenticateToken, requireAdmin, (req, res) => {
         res.json({ success: true });
     });
 });
-
 // Error handler — turns upload/multer and other errors into clean JSON responses
 // instead of leaking stack traces via the default HTML error page.
 app.use((err, req, res, next) => {
