@@ -7,7 +7,7 @@ import { googleSignIn } from './firebase';
 // API base URL. In production set VITE_API_URL (e.g. '' for same-origin behind
 // an nginx reverse proxy, or 'https://api.yourdomain.com'); defaults to the
 // local backend for development.
-const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
 
 // Brand / legal placeholders — replace with your real company details before
 // going live. The legal pages below are professional templates and should be
@@ -1031,7 +1031,7 @@ const DashboardLayout = ({ children }) => {
           <Link to="/dashboard/single" className={`nav-item ${location.pathname==='/dashboard/single'?'active':''}`}><Search size={18}/> Single Verify</Link>
           <Link to="/dashboard/bulk" className={`nav-item ${location.pathname==='/dashboard/bulk'?'active':''}`}><List size={18}/> Bulk Verification</Link>
           <Link to="/dashboard/csv" className={`nav-item ${location.pathname==='/dashboard/csv'?'active':''}`}><Upload size={18}/> Clean a List</Link>
-          {user?.role === 'admin' && (
+          {(user?.role === 'admin' || user?.role === 'superadmin') && (
             <Link to="/admin" className={`nav-item ${location.pathname==='/admin'?'active':''}`}><ShieldCheck size={18}/> Admin Panel</Link>
           )}
           <div style={{flex:1}}></div>
@@ -1404,11 +1404,17 @@ const GDPR = () => (
 
 // --- Admin Panel ---
 
+const ROLE_LABELS = { user: 'User', admin: 'Admin', superadmin: 'Super Admin' };
+
 const AdminPanel = () => {
   const { user } = useAuth();
   const [users, setUsers] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [viewerRole, setViewerRole] = useState(user.role);
+
+  // Superadmins may assign any role; a plain admin may only set user/admin.
+  const roleOptions = viewerRole === 'superadmin' ? ['user', 'admin', 'superadmin'] : ['user', 'admin'];
 
   const load = () => {
     setLoading(true);
@@ -1417,6 +1423,7 @@ const AdminPanel = () => {
       apiFetch('/admin/stats').catch(() => null),
     ]).then(([u, s]) => {
       setUsers((u && u.users) || []);
+      if (u && u.viewerRole) setViewerRole(u.viewerRole);
       if (s && !s.error) setStats(s);
     }).finally(() => setLoading(false));
   };
@@ -1427,8 +1434,8 @@ const AdminPanel = () => {
     if (data.error) return alert(data.error);
     setUsers(us => us.map(u => u.id === id ? { ...u, credits: data.credits } : u));
   };
-  const toggleRole = async (u) => {
-    const role = u.role === 'admin' ? 'user' : 'admin';
+  const setRole = async (u, role) => {
+    if (role === u.role) return;
     const data = await apiFetch(`/admin/users/${u.id}/role`, { method: 'POST', body: JSON.stringify({ role }) });
     if (data.error) return alert(data.error);
     setUsers(us => us.map(x => x.id === u.id ? { ...x, role } : x));
@@ -1447,6 +1454,7 @@ const AdminPanel = () => {
       <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:'1.25rem', marginBottom:'1.5rem'}}>
         <StatCard label="Total Users" value={stats?.total_users ?? '—'} accent="var(--accent-color)" />
         <StatCard label="Admins" value={stats?.admins ?? '—'} />
+        {viewerRole === 'superadmin' && <StatCard label="Super Admins" value={stats?.superadmins ?? '—'} accent="#7c3aed" />}
         <StatCard label="Total Verifications" value={stats?.total_emails ?? '—'} />
         <StatCard label="Credits in System" value={stats?.total_credits ?? '—'} accent="#059669" />
       </div>
@@ -1466,7 +1474,7 @@ const AdminPanel = () => {
                   <tr key={u.id}>
                     <td>{u.id}</td>
                     <td><strong>{u.email}</strong>{u.id === user.id && <span style={{color:'var(--text-secondary)', fontWeight:400}}> (you)</span>}</td>
-                    <td><span className={`badge ${u.role === 'admin' ? 'catch-all' : 'unknown'}`}>{(u.role || 'user').toUpperCase()}</span></td>
+                    <td><span className={`badge role-${u.role || 'user'}`}>{ROLE_LABELS[u.role] || 'User'}</span></td>
                     <td>
                       <div style={{display:'flex', alignItems:'center', gap:'0.35rem'}}>
                         <button className="icon-btn" title="-100" onClick={() => adjustCredits(u.id, -100)}><Minus size={14}/></button>
@@ -1477,10 +1485,18 @@ const AdminPanel = () => {
                     <td>{u.emails_verified}</td>
                     <td style={{color:'var(--text-secondary)', fontSize:'0.85rem'}}>{u.created_at ? formatDate(u.created_at) : '—'}</td>
                     <td>
-                      <div style={{display:'flex', gap:'0.4rem'}}>
-                        <button className="btn-secondary" style={{padding:'0.35rem 0.6rem'}} onClick={() => toggleRole(u)}>
-                          {u.role === 'admin' ? 'Make User' : 'Make Admin'}
-                        </button>
+                      <div style={{display:'flex', gap:'0.4rem', alignItems:'center'}}>
+                        <select
+                          className="role-select"
+                          value={u.role || 'user'}
+                          disabled={u.id === user.id}
+                          title={u.id === user.id ? "You can't change your own role" : 'Change role'}
+                          onChange={(e) => setRole(u, e.target.value)}
+                        >
+                          {(roleOptions.includes(u.role) ? roleOptions : [...roleOptions, u.role]).map(r => (
+                            <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>
+                          ))}
+                        </select>
                         {u.id !== user.id && (
                           <button className="icon-btn danger" title="Delete user" onClick={() => removeUser(u)}><Trash2 size={15}/></button>
                         )}
@@ -1500,7 +1516,7 @@ const AdminPanel = () => {
 const ProtectedRoute = ({ children, adminOnly = false }) => {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" />;
-  if (adminOnly && user.role !== 'admin') return <DashboardLayout><div className="card" style={{padding:'2rem'}}>Admin access required.</div></DashboardLayout>;
+  if (adminOnly && user.role !== 'admin' && user.role !== 'superadmin') return <DashboardLayout><div className="card" style={{padding:'2rem'}}>Admin access required.</div></DashboardLayout>;
   return <DashboardLayout>{children}</DashboardLayout>;
 };
 

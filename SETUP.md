@@ -98,14 +98,27 @@ Open the printed URL — **http://localhost:5173**.
 3. The **first account that registers automatically becomes admin** and can
    open the **Admin Panel** (manage users and credits).
 
-Want a specific email to always be admin? Set it in the backend `.env`:
+### Roles: superadmin, admin, user
+There are three roles, highest to lowest: **superadmin › admin › user**.
 
-```
-ADMIN_EMAIL=you@yourcompany.com
-```
+- The **first account** to register automatically becomes **superadmin**.
+- Force specific accounts via the backend `.env` (applied on restart, even for existing users):
+  ```
+  SUPERADMIN_EMAIL=you@yourcompany.com     # promoted to superadmin
+  ADMIN_EMAIL=teammate@yourcompany.com     # promoted to admin
+  ```
 
-That account is promoted to admin on the next backend restart (even if it
-already exists).
+**Who can see whom** in the Admin Panel (enforced on the server, not just hidden in the UI):
+
+| Viewer | Sees superadmins | Sees admins | Sees users |
+|--------|:---:|:---:|:---:|
+| superadmin | ✅ | ✅ | ✅ |
+| admin | ❌ | ✅ | ✅ |
+| user | — (no admin panel access) | | |
+
+- Only a **superadmin** can grant/revoke the superadmin role or edit/delete a superadmin.
+- An **admin** can manage users and admins, but never sees or touches superadmins.
+- No one can change **their own** role (prevents lockout).
 
 ---
 
@@ -182,51 +195,47 @@ email/password. The rest of the app is unchanged.
 
 ---
 
-## 6. Password reset email (optional but recommended)
+## 6. Password reset email — make it actually send
 
-The forgot-password flow already works end-to-end:
+The forgot-password flow works end-to-end and **email sending is built in**
+(nodemailer). You only need to give it SMTP credentials.
 
-- User clicks **Forgot password?** → enters email → backend stores a **single-use,
-  1-hour, hashed** token and builds a link `FRONTEND_URL/reset-password?token=…`.
-- **In development**, that link is printed to the **backend console** so you can
-  copy it and test without any email service.
-- **In production**, you deliver it by email. Open `server.js`, find
-  `deliverResetEmail(email, link)`, and send a real message. Example with
-  nodemailer + SMTP:
+**How the flow works:** user clicks **Forgot password?** → enters email →
+backend stores a **single-use, 1-hour, hashed** token and builds a link
+`FRONTEND_URL/reset-password?token=…` → the link is emailed to the user → they
+open it and set a new password.
 
-```bash
-npm install nodemailer        # in the project root
+- **No SMTP set** → the link is printed to the **backend console** (fine for
+  local testing — copy it into your browser).
+- **SMTP set** → a real, styled email is sent automatically. Nothing else to code.
+
+### Easiest option: Gmail (app password)
+1. Enable 2-Step Verification on your Google account.
+2. Create an app password: <https://myaccount.google.com/apppasswords> → copy the 16-character code.
+3. In the root `.env`:
 ```
-
-```js
-// at the top of server.js
-const nodemailer = require('nodemailer');
-const mailer = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT || 587),
-  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-});
-
-// inside deliverResetEmail(email, link):
-await mailer.sendMail({
-  from: 'BounceCure <no-reply@yourdomain.com>',
-  to: email,
-  subject: 'Reset your BounceCure password',
-  html: `<p>Click to reset your password:</p><p><a href="${link}">${link}</a></p><p>This link expires in 1 hour.</p>`,
-});
-```
-
-Then set in `.env`:
-```
-FRONTEND_URL=https://app.yourdomain.com
-SMTP_HOST=smtp.yourprovider.com
+FRONTEND_URL=http://localhost:5173      # or your live app URL
+SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USER=...
-SMTP_PASS=...
+SMTP_USER=you@gmail.com
+SMTP_PASS=your16charapppassword         # the app password, NOT your Gmail login
+SMTP_FROM=BounceCure <you@gmail.com>
 ```
+4. Restart the backend. You'll see `[Mail] SMTP configured (smtp.gmail.com:587) — password-reset emails enabled.`
+5. Test: on the login page click **Forgot password?**, enter your email, and check your inbox.
 
-`FRONTEND_URL` must point to where the React app is served so the reset link
-opens the right page (default `http://localhost:5173`).
+### Any other provider (SendGrid, Mailgun, SES, your host…)
+Use the SMTP host/port/user/pass they give you. Port `465` uses SSL; `587` uses
+STARTTLS — both are handled automatically. `SMTP_FROM` should be an address your
+provider is allowed to send from.
+
+> `FRONTEND_URL` must point to where the React app is served, so the reset link
+> opens the right page (default `http://localhost:5173`).
+>
+> The email code lives in `mailer.js` (transport + HTML template) and is called
+> from `deliverResetEmail()` in `server.js`. If sending fails, the backend logs
+> the error and falls back to printing the link, so a mail outage never fully
+> breaks resets.
 
 ---
 

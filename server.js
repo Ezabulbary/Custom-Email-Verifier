@@ -10,6 +10,7 @@ const jwt = require('jsonwebtoken');
 const { fetchDomains } = require('./disposable');
 const { verifyEmail } = require('./verifier');
 const { isGoogleEnabled, verifyIdToken } = require('./firebaseAdmin');
+const { isEmailEnabled, sendResetEmail } = require('./mailer');
 const db = require('./db');
 
 const app = express();
@@ -58,14 +59,31 @@ app.get('/health', (req, res) => {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// The email that should be treated as the super admin. Set ADMIN_EMAIL in the
-// environment; that account (existing or newly registered) becomes admin.
+// Roles, highest to lowest. superadmin > admin > user.
+const ROLES = ['user', 'admin', 'superadmin'];
+const rank = (role) => Math.max(0, ROLES.indexOf(role || 'user'));
+
+// Configured privileged emails. SUPERADMIN_EMAIL becomes superadmin, ADMIN_EMAIL
+// becomes admin — on startup (even for already-registered accounts) and at signup.
+const SUPERADMIN_EMAIL = (process.env.SUPERADMIN_EMAIL || '').trim().toLowerCase();
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 
-// Promote the configured admin email on startup (works for already-registered
-// accounts too).
+// Decide the role a brand-new (or bootstrapping) account should get.
+function bootstrapRole(email, isFirstUser) {
+    const e = (email || '').toLowerCase();
+    if (isFirstUser || e === SUPERADMIN_EMAIL) return 'superadmin';
+    if (e === ADMIN_EMAIL) return 'admin';
+    return 'user';
+}
+
+if (SUPERADMIN_EMAIL) {
+    db.run(`UPDATE users SET role = 'superadmin' WHERE lower(email) = ?`, [SUPERADMIN_EMAIL], function (err) {
+        if (!err && this.changes > 0) console.log(`[Admin] ${SUPERADMIN_EMAIL} promoted to superadmin.`);
+    });
+}
 if (ADMIN_EMAIL) {
-    db.run(`UPDATE users SET role = 'admin' WHERE lower(email) = ?`, [ADMIN_EMAIL], function (err) {
+    // Don't demote a superadmin if the same email was set for both.
+    db.run(`UPDATE users SET role = 'admin' WHERE lower(email) = ? AND role != 'superadmin'`, [ADMIN_EMAIL], function (err) {
         if (!err && this.changes > 0) console.log(`[Admin] ${ADMIN_EMAIL} promoted to admin.`);
     });
 }
@@ -84,10 +102,10 @@ app.post('/auth/register', (req, res) => {
     bcrypt.hash(password, 10, (err, hash) => {
         if (err) return res.status(500).json({ error: 'Server error' });
 
-        // First-ever user, or the configured ADMIN_EMAIL, becomes the admin.
+        // First-ever user → superadmin; configured emails get their roles.
         db.get(`SELECT COUNT(*) AS n FROM users`, [], (cErr, row) => {
             const isFirst = !cErr && row && row.n === 0;
-            const role = (isFirst || email.toLowerCase() === ADMIN_EMAIL) ? 'admin' : 'user';
+            const role = bootstrapRole(email, isFirst);
 
             db.run(`INSERT INTO users (email, password, credits, role) VALUES (?, ?, 100, ?)`, [email, hash, role], function(err) {
                 if (err) {
@@ -152,10 +170,10 @@ app.post('/auth/google', async (req, res) => {
         if (err) return res.status(500).json({ error: 'Database error' });
         if (user) return issue(user);
 
-        // First-ever user, or the configured ADMIN_EMAIL, becomes the admin.
+        // First-ever user → superadmin; configured emails get their roles.
         db.get(`SELECT COUNT(*) AS n FROM users`, [], (cErr, row) => {
             const isFirst = !cErr && row && row.n === 0;
-            const role = (isFirst || email === ADMIN_EMAIL) ? 'admin' : 'user';
+            const role = bootstrapRole(email, isFirst);
             db.run(`INSERT INTO users (email, password, credits, role) VALUES (?, NULL, 100, ?)`, [email, role], function (insErr) {
                 if (insErr) {
                     if (insErr.message.includes('UNIQUE constraint failed')) {
@@ -175,14 +193,21 @@ const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
-// Single place that "sends" the reset email. Wire your email provider here
-// (nodemailer/SendGrid/etc). Until then, in non-production we log the link so
-// you can test the flow locally.
-function deliverResetEmail(email, link) {
-    if (process.env.NODE_ENV === 'production') {
-        // TODO: integrate a real email provider here.
-        console.log(`[Reset] (production) reset link generated for ${email} — wire an email provider in deliverResetEmail().`);
-    } else {
+// Deliver the reset link. If SMTP is configured (see mailer.js), send a real
+// email; otherwise, and on any send failure, log the link to the console so the
+// flow still works in development.
+async function deliverResetEmail(email, link) {
+    if (isEmailEnabled()) {
+        try {
+            await sendResetEmail(email, link);
+            console.log(`[Reset] Reset email sent to ${email}.`);
+            return;
+        } catch (e) {
+            console.error(`[Reset] Failed to send reset email to ${email}:`, e.message);
+            // fall through to logging so a mail outage doesn't fully break resets
+        }
+    }
+    if (process.env.NODE_ENV !== 'production') {
         console.log(`\n[Reset] Password-reset link for ${email}:\n  ${link}\n`);
     }
 }
@@ -258,12 +283,23 @@ app.get('/auth/me', authenticateToken, (req, res) => {
     });
 });
 
-// Admin-only guard — verifies the current user still has the admin role.
+// Admin guard — allows admin AND superadmin. Exposes the live role on req so
+// handlers can apply superadmin-only rules.
 function requireAdmin(req, res, next) {
     db.get(`SELECT role FROM users WHERE id = ?`, [req.user.id], (err, row) => {
         if (err) return res.status(500).json({ error: 'Database error' });
-        if (!row || row.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+        if (!row || (row.role !== 'admin' && row.role !== 'superadmin')) {
+            return res.status(403).json({ error: 'Admin access required' });
+        }
+        req.viewerRole = row.role;
         next();
+    });
+}
+
+// Fetch a target user's role (null if not found).
+function getRole(id) {
+    return new Promise((resolve) => {
+        db.get(`SELECT role FROM users WHERE id = ?`, [id], (err, row) => resolve(err || !row ? null : row.role));
     });
 }
 
@@ -513,57 +549,79 @@ function safeParse(json) {
 
 // --- Admin Endpoints (Protected, admin only) ---
 
-// List all users with their verification counts.
+// List users with their verification counts. Superadmins are visible ONLY to
+// superadmins; a plain admin never sees superadmin accounts.
 app.get('/admin/users', authenticateToken, requireAdmin, (req, res) => {
+    const hideSuper = req.viewerRole !== 'superadmin';
     const sql = `SELECT u.id, u.email, u.credits, u.role, u.created_at,
                         COALESCE(SUM(h.total), 0) AS emails_verified,
                         COUNT(h.id) AS executions
                  FROM users u
                  LEFT JOIN history h ON h.user_id = u.id
+                 ${hideSuper ? `WHERE u.role != 'superadmin'` : ''}
                  GROUP BY u.id
                  ORDER BY u.id ASC`;
     db.all(sql, [], (err, rows) => {
         if (err) return res.status(500).json({ error: 'Failed to load users' });
-        res.json({ users: rows });
+        res.json({ users: rows, viewerRole: req.viewerRole });
     });
 });
 
-// Platform-wide stats.
+// Platform-wide stats. For a plain admin, superadmins are excluded from the
+// user/credit counts so hidden accounts don't leak through the numbers.
 app.get('/admin/stats', authenticateToken, requireAdmin, (req, res) => {
+    const superFilter = req.viewerRole === 'superadmin' ? '' : `WHERE role != 'superadmin'`;
     db.get(`SELECT
-                (SELECT COUNT(*) FROM users) AS total_users,
+                (SELECT COUNT(*) FROM users ${superFilter}) AS total_users,
                 (SELECT COUNT(*) FROM users WHERE role = 'admin') AS admins,
-                (SELECT COALESCE(SUM(credits),0) FROM users) AS total_credits,
+                (SELECT COUNT(*) FROM users WHERE role = 'superadmin') AS superadmins,
+                (SELECT COALESCE(SUM(credits),0) FROM users ${superFilter}) AS total_credits,
                 (SELECT COUNT(*) FROM history) AS total_executions,
                 (SELECT COALESCE(SUM(total),0) FROM history) AS total_emails,
                 (SELECT COALESCE(SUM(valid_count),0) FROM history) AS total_valid`,
         [], (err, row) => {
             if (err) return res.status(500).json({ error: 'Failed to load stats' });
+            if (req.viewerRole !== 'superadmin') row.superadmins = undefined;
             res.json(row);
         });
 });
 
+// A plain admin may never see or act on a superadmin — treat as not found.
+const targetHiddenFromViewer = (targetRole, viewerRole) =>
+    targetRole === 'superadmin' && viewerRole !== 'superadmin';
+
 // Adjust a user's credits by a (positive or negative) delta.
-app.post('/admin/users/:id/credits', authenticateToken, requireAdmin, (req, res) => {
+app.post('/admin/users/:id/credits', authenticateToken, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     const delta = parseInt(req.body.delta, 10);
     if (Number.isNaN(id) || Number.isNaN(delta)) return res.status(400).json({ error: 'Invalid input' });
+
+    const targetRole = await getRole(id);
+    if (targetRole === null || targetHiddenFromViewer(targetRole, req.viewerRole)) {
+        return res.status(404).json({ error: 'User not found' });
+    }
     db.run(`UPDATE users SET credits = MAX(credits + ?, 0) WHERE id = ?`, [delta, id], function (err) {
         if (err) return res.status(500).json({ error: 'Database error' });
-        if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
         db.get(`SELECT credits FROM users WHERE id = ?`, [id], (e, row) => {
             res.json({ success: true, credits: row ? row.credits : null });
         });
     });
 });
 
-// Change a user's role ('user' | 'admin').
-app.post('/admin/users/:id/role', authenticateToken, requireAdmin, (req, res) => {
+// Change a user's role ('user' | 'admin' | 'superadmin').
+app.post('/admin/users/:id/role', authenticateToken, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     const role = req.body.role;
-    if (Number.isNaN(id) || !['user', 'admin'].includes(role)) return res.status(400).json({ error: 'Invalid input' });
-    if (id === req.user.id && role !== 'admin') {
-        return res.status(400).json({ error: 'You cannot remove your own admin role' });
+    if (Number.isNaN(id) || !ROLES.includes(role)) return res.status(400).json({ error: 'Invalid input' });
+    if (id === req.user.id) return res.status(400).json({ error: 'You cannot change your own role' });
+
+    const targetRole = await getRole(id);
+    if (targetRole === null || targetHiddenFromViewer(targetRole, req.viewerRole)) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+    // Only a superadmin may grant the superadmin role or modify a superadmin.
+    if ((role === 'superadmin' || targetRole === 'superadmin') && req.viewerRole !== 'superadmin') {
+        return res.status(403).json({ error: 'Only a superadmin can manage the superadmin role' });
     }
     db.run(`UPDATE users SET role = ? WHERE id = ?`, [role, id], function (err) {
         if (err) return res.status(500).json({ error: 'Database error' });
@@ -573,10 +631,19 @@ app.post('/admin/users/:id/role', authenticateToken, requireAdmin, (req, res) =>
 });
 
 // Delete a user and their history.
-app.delete('/admin/users/:id', authenticateToken, requireAdmin, (req, res) => {
+app.delete('/admin/users/:id', authenticateToken, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid input' });
     if (id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
+
+    const targetRole = await getRole(id);
+    if (targetRole === null || targetHiddenFromViewer(targetRole, req.viewerRole)) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+    // Only a superadmin can delete a superadmin (already hidden from admins).
+    if (targetRole === 'superadmin' && req.viewerRole !== 'superadmin') {
+        return res.status(403).json({ error: 'Only a superadmin can delete a superadmin' });
+    }
     db.run(`DELETE FROM users WHERE id = ?`, [id], function (err) {
         if (err) return res.status(500).json({ error: 'Database error' });
         if (this.changes === 0) return res.status(404).json({ error: 'User not found' });

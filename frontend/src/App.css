@@ -325,6 +325,17 @@
 .badge.invalid { background: #fee2e2; color: #dc2626; }
 .badge.catch-all { background: #fef3c7; color: #d97706; }
 .badge.unknown { background: #f1f5f9; color: #64748b; }
+/* Role badges */
+.badge.role-superadmin { background: #ede9fe; color: #6d28d9; }
+.badge.role-admin { background: #fef3c7; color: #b45309; }
+.badge.role-user { background: #f1f5f9; color: #64748b; }
+/* Role selector in the admin table */
+.role-select {
+  padding: 0.35rem 0.6rem; border: 1px solid var(--border-color); border-radius: 8px;
+  background: #fff; font-family: inherit; font-size: 0.85rem; color: var(--text-primary); cursor: pointer;
+}
+.role-select:hover { border-color: var(--accent-color); }
+.role-select:disabled { opacity: 0.55; cursor: not-allowed; background: var(--bg-surface-hover); }
 
 .loader { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
