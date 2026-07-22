@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, createContext, useCont
 import { Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
 import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Star, Quote, Phone } from 'lucide-react';
 import './App.css';
-import { googleSignIn, isFirebaseConfigured } from './firebase';
+import { googleSignIn } from './firebase';
 
 // API base URL. In production set VITE_API_URL (e.g. '' for same-origin behind
 // an nginx reverse proxy, or 'https://api.yourdomain.com'); defaults to the
@@ -807,9 +807,6 @@ const AuthShell = ({ title, subtitle, error, children, alt, reverse, brandTitle,
             <button type="button" className="google-btn" onClick={handleGoogle} disabled={gLoading}>
               {gLoading ? <Loader2 className="loader" size={18} /> : <GoogleIcon />} Continue with Google
             </button>
-            {!isFirebaseConfigured && (
-              <div className="google-hint">Google sign-in needs Firebase keys — see SETUP.md.</div>
-            )}
 
             <div className="auth-divider"><span>or use your email</span></div>
 
