@@ -1,113 +1,345 @@
-# BounceCure — Setup & Configuration Guide
+# BounceCure — Full Setup & Configuration Guide
 
-This explains **where to add every key** and **where your data is stored**.
+A step-by-step guide, from a fresh machine to a running app, plus optional
+Google sign-in, password-reset email, and production deployment.
+
+> **TL;DR** — two processes must run: the **backend** (`node server.js`, port 3001)
+> and the **frontend** (`npm run dev`, port 5173). Everything else below is detail.
 
 ---
 
-## 1. Run it locally (2 processes)
+## 0. Prerequisites
 
-The app has **two parts** that must both run:
-
-| Part | Folder | Command | Port |
-|------|--------|---------|------|
-| Backend API (auth + email verification) | project root | `npm install` then `node server.js` | 3001 |
-| Frontend (React UI) | `frontend/` | `npm install` then `npm run dev` | 5173 |
+You need **Node.js 20 or newer** and npm (npm ships with Node).
 
 ```bash
-# Terminal 1 — backend
-npm install
-node server.js            # or: node --env-file=.env server.js
-
-# Terminal 2 — frontend
-cd frontend
-npm install
-npm run dev
+node -v      # should print v20.x or higher
+npm -v
 ```
 
-Open the printed frontend URL (e.g. http://localhost:5173).
-**If the backend is not running, login/register show "Cannot reach the server".** That is expected — start `node server.js`.
+If you don't have it, install from <https://nodejs.org> (LTS) or with nvm:
+
+```bash
+# macOS/Linux with nvm
+nvm install 20
+nvm use 20
+```
+
+**Project layout** (after you unzip the code):
+
+```
+Custom-Email-Verifier/
+├── server.js            ← backend API (Express)
+├── db.js                ← SQLite schema (users, history, password_resets)
+├── firebaseAdmin.js     ← optional Google token verification
+├── verifier.js, smtp.js, providers.js, disposable.js  ← verification engine
+├── package.json         ← backend dependencies
+├── .env.example         ← backend env template
+├── SETUP.md             ← this file
+└── frontend/            ← React app (Vite)
+    ├── src/
+    ├── package.json     ← frontend dependencies
+    └── .env.example     ← frontend env template
+```
 
 ---
 
-## 2. Where is my data stored right now?
+## 1. Run the backend (Terminal 1)
 
-- **Users** (email, bcrypt-hashed password, credits, role) → **`users.sqlite`** (a SQLite file created automatically in the project root, `users` table).
-- **Work / verification history** (single, bulk, CSV runs + results) → same `users.sqlite`, `history` table (kept 30 days).
-- The first account that registers becomes **admin**.
+```bash
+cd Custom-Email-Verifier      # the project root
+npm install                   # installs express, sqlite3, bcryptjs, firebase-admin, …
+cp .env.example .env          # create your env file (edit it if you like)
+node server.js                # starts the API on http://localhost:3001
+```
 
-`users.sqlite` is git-ignored, so it never gets committed. Back it up like any database file.
+On success you'll see:
+
+```
+[Auth] Firebase service account not set — Google sign-in disabled.
+Email Verifier API running on port 3001
+Connected to the SQLite database.
+Disposable domains loaded. Ready to verify.
+```
+
+- The database file **`users.sqlite`** is created automatically on first run.
+- `node server.js` does **not** auto-read `.env`. Either export the vars in your
+  shell, or run `node --env-file=.env server.js` (Node 20+), or use a process
+  manager (see §7). For local dev the defaults work without any `.env`.
+
+Leave this terminal running.
 
 ---
 
-## 3. Enable "Continue with Google" (optional)
+## 2. Run the frontend (Terminal 2)
 
-Google sign-in uses **Firebase Authentication**. It's optional — without it the button just shows a hint and email/password still works.
+Open a **second** terminal:
 
-### Step A — Create a Firebase project
-1. Go to <https://console.firebase.google.com> → **Add project**.
-2. In **Build → Authentication → Sign-in method**, enable **Google**.
-3. In **Authentication → Settings → Authorized domains**, add `localhost` and your production domain.
+```bash
+cd Custom-Email-Verifier/frontend
+npm install                   # installs react, react-router, firebase, …
+cp .env.example .env          # create the frontend env file
+npm run dev                   # starts Vite on http://localhost:5173
+```
 
-### Step B — Frontend keys → `frontend/.env`
-Firebase console → **Project settings (⚙️) → General → Your apps → Web app** → copy the SDK config into `frontend/.env`:
+Open the printed URL — **http://localhost:5173**.
+
+> **Important:** the frontend calls the backend at `VITE_API_URL`
+> (default `http://localhost:3001`). If the backend in Terminal 1 isn't running,
+> login/register will show **"Cannot reach the server."** — that's expected;
+> start the backend.
+
+---
+
+## 3. Create your first account (and admin)
+
+1. Go to **http://localhost:5173/register**.
+2. Sign up with an email + password (min 8 characters).
+3. The **first account that registers automatically becomes admin** and can
+   open the **Admin Panel** (manage users and credits).
+
+Want a specific email to always be admin? Set it in the backend `.env`:
+
+```
+ADMIN_EMAIL=you@yourcompany.com
+```
+
+That account is promoted to admin on the next backend restart (even if it
+already exists).
+
+---
+
+## 4. Where is my data stored?
+
+| Data | Location | Table |
+|------|----------|-------|
+| Users (email, bcrypt-hashed password, credits, role) | `users.sqlite` (project root) | `users` |
+| Verification history (single/bulk/CSV runs + results, 30 days) | `users.sqlite` | `history` |
+| Password-reset tokens (hashed, single-use, 1h) | `users.sqlite` | `password_resets` |
+
+`users.sqlite` is git-ignored, so it's never committed. Back it up like any DB
+file. To wipe all local data during testing, stop the backend and delete
+`users.sqlite` — it will be recreated empty.
+
+---
+
+## 5. Enable "Continue with Google" (optional)
+
+Google sign-in uses **Firebase Authentication**. It's entirely optional — the
+app works with email/password alone. When it isn't configured, clicking the
+Google button just returns a friendly error; nothing breaks.
+
+There are **three pieces**: create a Firebase project, add the web keys to the
+**frontend**, and add a service account to the **backend**.
+
+### 5A. Create the Firebase project (once)
+1. Go to <https://console.firebase.google.com> → **Add project** → give it a name → create.
+2. Left sidebar → **Build → Authentication** → **Get started**.
+3. Tab **Sign-in method** → **Add new provider** → **Google** → toggle **Enable** → pick a support email → **Save**.
+4. Tab **Settings → Authorized domains** → make sure **`localhost`** is listed (add your live domain later).
+
+### 5B. Frontend web keys → `frontend/.env`
+1. Firebase console → click the **⚙️ gear → Project settings**.
+2. Scroll to **Your apps**. If there's no web app yet, click the **`</>` (Web)** icon, register an app (any nickname), and skip hosting.
+3. You'll see a `firebaseConfig` object. Copy these values into `frontend/.env`:
 
 ```
 VITE_API_URL=http://localhost:3001
-VITE_FIREBASE_API_KEY=AIza...
+VITE_FIREBASE_API_KEY=AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXX
 VITE_FIREBASE_AUTH_DOMAIN=your-app.firebaseapp.com
 VITE_FIREBASE_PROJECT_ID=your-app
-VITE_FIREBASE_APP_ID=1:1234567890:web:abcdef
+VITE_FIREBASE_APP_ID=1:1234567890:web:abcdef123456
 ```
-Then restart `npm run dev`. (Template: `frontend/.env.example`.)
 
-### Step C — Backend service account → root `.env`
-Firebase console → **Project settings → Service accounts → Generate new private key** (downloads a JSON). Give the backend access one of two ways:
+4. **Restart** `npm run dev` (Vite only reads `.env` at startup).
 
-**Option 1 — paste the JSON (one line):**
-```
-FIREBASE_SERVICE_ACCOUNT={"type":"service_account","project_id":"...", ... }
-```
-**Option 2 — save the file as `serviceAccount.json` in the project root and point to it:**
-```
-GOOGLE_APPLICATION_CREDENTIALS=./serviceAccount.json
-```
-Restart the backend. You should see `[Auth] Firebase Admin initialised — Google sign-in enabled.`
+### 5C. Backend service account → root `.env`
+The backend verifies the Google token server-side, which needs a service account:
 
-> Flow: browser gets a Google token → backend verifies it with firebase-admin → finds/creates the user in `users.sqlite` (NULL password, 100 credits) → issues the app JWT. Nothing else changes.
+1. Firebase console → **⚙️ Project settings → Service accounts** tab.
+2. Click **Generate new private key** → confirm → a `.json` file downloads.
+3. Give the backend access **one of two ways**:
+
+   **Option 1 — save the file** as `serviceAccount.json` in the project root, then in `.env`:
+   ```
+   GOOGLE_APPLICATION_CREDENTIALS=./serviceAccount.json
+   ```
+   **Option 2 — paste the JSON** as a single line in `.env`:
+   ```
+   FIREBASE_SERVICE_ACCOUNT={"type":"service_account","project_id":"...", ... }
+   ```
+4. Restart the backend. Success looks like:
+   ```
+   [Auth] Firebase Admin initialised — Google sign-in enabled.
+   ```
+
+> `serviceAccount.json` and `.env` are git-ignored — **never commit them**.
+
+**How it works:** browser gets a Google ID token → `POST /auth/google` → backend
+verifies it with firebase-admin → finds or creates the user in `users.sqlite`
+(no password, 100 credits, first user = admin) → issues the same app JWT used by
+email/password. The rest of the app is unchanged.
 
 ---
 
-## 4. Storage architecture — recommendation
+## 6. Password reset email (optional but recommended)
 
-You asked about Firebase for users and Cloudinary for work history. Here's the production-correct split:
+The forgot-password flow already works end-to-end:
+
+- User clicks **Forgot password?** → enters email → backend stores a **single-use,
+  1-hour, hashed** token and builds a link `FRONTEND_URL/reset-password?token=…`.
+- **In development**, that link is printed to the **backend console** so you can
+  copy it and test without any email service.
+- **In production**, you deliver it by email. Open `server.js`, find
+  `deliverResetEmail(email, link)`, and send a real message. Example with
+  nodemailer + SMTP:
+
+```bash
+npm install nodemailer        # in the project root
+```
+
+```js
+// at the top of server.js
+const nodemailer = require('nodemailer');
+const mailer = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT || 587),
+  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+});
+
+// inside deliverResetEmail(email, link):
+await mailer.sendMail({
+  from: 'BounceCure <no-reply@yourdomain.com>',
+  to: email,
+  subject: 'Reset your BounceCure password',
+  html: `<p>Click to reset your password:</p><p><a href="${link}">${link}</a></p><p>This link expires in 1 hour.</p>`,
+});
+```
+
+Then set in `.env`:
+```
+FRONTEND_URL=https://app.yourdomain.com
+SMTP_HOST=smtp.yourprovider.com
+SMTP_PORT=587
+SMTP_USER=...
+SMTP_PASS=...
+```
+
+`FRONTEND_URL` must point to where the React app is served so the reset link
+opens the right page (default `http://localhost:5173`).
+
+---
+
+## 7. Deploy to production
+
+### 7A. Build the frontend
+```bash
+cd frontend
+# point the build at your real API origin first:
+#   VITE_API_URL=https://api.yourdomain.com   (or '' if same-origin behind nginx)
+npm run build          # outputs static files to frontend/dist/
+```
+Serve `frontend/dist/` as static files (nginx, Netlify, Vercel, S3+CloudFront…).
+
+### 7B. Run the backend
+```bash
+export NODE_ENV=production
+export JWT_SECRET=$(node -e "console.log(require('crypto').randomBytes(48).toString('hex'))")
+export CORS_ORIGINS=https://app.yourdomain.com
+node server.js
+# better: keep it alive with pm2
+npm i -g pm2 && pm2 start server.js --name bouncecure-api
+```
+
+### 7C. Example nginx (frontend static + API proxy)
+```nginx
+server {
+  server_name app.yourdomain.com;
+
+  root /var/www/bouncecure/frontend/dist;
+  location / { try_files $uri /index.html; }      # SPA fallback
+
+  location /auth/ { proxy_pass http://127.0.0.1:3001; }
+  location /verify { proxy_pass http://127.0.0.1:3001; }
+  location /history { proxy_pass http://127.0.0.1:3001; }
+  location /admin/ { proxy_pass http://127.0.0.1:3001; }
+  location /health { proxy_pass http://127.0.0.1:3001; }
+}
+```
+If you proxy the API on the same domain, set `VITE_API_URL=''` and rebuild.
+
+> **SMTP note:** outbound email verification uses port 25. Many hosts block it —
+> use a provider/VPS that allows outbound SMTP, or verification results may be
+> "unknown".
+
+### 7D. Production checklist
+- [ ] `NODE_ENV=production` **and** a strong `JWT_SECRET` (required — the server refuses to start without it in production).
+- [ ] `CORS_ORIGINS=https://app.yourdomain.com`
+- [ ] `VITE_API_URL` set and frontend **rebuilt** (`npm run build`).
+- [ ] `FRONTEND_URL` set (for reset links) and email provider wired in `deliverResetEmail()`.
+- [ ] Your live domain added to Firebase **Authorized domains** (if using Google).
+- [ ] `.env` and `serviceAccount.json` kept **out of git** (already git-ignored).
+- [ ] `users.sqlite` on persistent disk and backed up.
+
+---
+
+## 8. Storage architecture (recommendation)
+
+You asked about Firebase for users and Cloudinary for work history. The
+production-correct split:
 
 | Data | Best store | Why |
 |------|-----------|-----|
-| Users / auth | **Firebase Auth + Firestore** | Handles Google + email, sessions, password reset. |
-| Work / verification history | **Firestore** (a `history` collection) | It's structured JSON — a database, not a file. Query/paginate easily. |
-| Exported CSV **files** (only if you want to host them) | **Cloudinary** or S3-style storage | Cloudinary is a **media/file CDN** — good for files, **not** for JSON history rows. |
+| Users / auth | **Firebase Auth + Firestore** | Handles Google + email, sessions, resets. |
+| Work / verification history | **Firestore** (`history` collection) | It's structured JSON — a database, not a file. |
+| Exported CSV **files** (only if you host them) | **Cloudinary** or S3 | Cloudinary is a **media/file CDN** — good for files, **not** JSON history rows. |
 
-**Bottom line:** put both users and history in Firebase (Firestore). Use Cloudinary **only** if you later want to store generated CSV/report files as downloadable media. Today the app keeps both in SQLite, which is perfectly fine for a single server; move to Firestore when you need multi-instance scale or serverless.
-
-*(Migrating the history table to Firestore is a follow-up: swap the `db.*` calls in `server.js` history routes for Firestore reads/writes with firebase-admin — the same service account from Step C.)*
+**Bottom line:** put both users and history in Firebase (Firestore). Use
+Cloudinary **only** if you later store generated CSV/report *files* as media.
+Today the app keeps both in SQLite — perfectly fine for a single server; migrate
+to Firestore when you need multi-instance scale. (To migrate history, replace
+the `db.*` calls in the `server.js` history routes with firebase-admin Firestore
+reads/writes using the same service account from §5C.)
 
 ---
 
-## 5. Password reset & "Book a call"
+## 9. All environment variables (quick reference)
 
-**Forgot password** works out of the box for email/password accounts:
-1. User clicks *Forgot password?* → enters email → backend stores a single-use,
-   1-hour token (hashed) and generates a reset link `FRONTEND_URL/reset-password?token=…`.
-2. In **development** the link is printed to the backend console so you can test.
-3. In **production**, wire your email provider (SendGrid, SES, nodemailer/SMTP…)
-   inside `deliverResetEmail()` in `server.js`, and set `FRONTEND_URL`.
+**Backend — root `.env`** (template: `.env.example`)
 
-**Book a quick call:** the "Book a quick call" buttons open `BRAND.callUrl` in
-`frontend/src/App.jsx`. Replace it with your real Calendly / Cal.com booking link.
+| Var | Needed | Purpose |
+|-----|--------|---------|
+| `NODE_ENV` | prod | `production` on the live server (makes `JWT_SECRET` mandatory). |
+| `PORT` | no | API port (default 3001). |
+| `JWT_SECRET` | prod | Signs login tokens. Generate a random 48-byte hex string. |
+| `CORS_ORIGINS` | prod | Comma-separated allowed frontend origins. |
+| `ADMIN_EMAIL` | no | Email that becomes admin on startup. |
+| `FRONTEND_URL` | for resets | Base URL used in password-reset links. |
+| `FIREBASE_SERVICE_ACCOUNT` / `GOOGLE_APPLICATION_CREDENTIALS` | for Google | Service account (paste JSON, or path to file). |
+| `SMTP_*` | for reset email | Your email provider (if you wire nodemailer). |
+| `ALLOW_PRIVATE_MX` | rare | Set to 1 only to verify against private-IP mail servers. |
 
-## 6. Production checklist
-- Set `NODE_ENV=production` and a strong `JWT_SECRET` (`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`).
-- Set `CORS_ORIGINS=https://your-frontend-domain`.
-- Set `VITE_API_URL` to your API origin and rebuild the frontend (`npm run build`).
-- Add your production domain to Firebase **Authorized domains**.
-- Keep `serviceAccount.json` / `.env` **out of git** (already git-ignored).
+**Frontend — `frontend/.env`** (template: `frontend/.env.example`)
+
+| Var | Needed | Purpose |
+|-----|--------|---------|
+| `VITE_API_URL` | yes | Backend API origin. |
+| `VITE_FIREBASE_API_KEY` / `_AUTH_DOMAIN` / `_PROJECT_ID` / `_APP_ID` | for Google | Firebase web config. |
+
+Also edit `BRAND.callUrl` in `frontend/src/App.jsx` — the "Book a quick call"
+buttons open it (put your Calendly / Cal.com link there).
+
+---
+
+## 10. Troubleshooting
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| "Cannot reach the server" on login/register | Backend not running, or `VITE_API_URL` wrong. Start `node server.js`. |
+| Backend exits: "FATAL: JWT_SECRET must be set" | `NODE_ENV=production` without `JWT_SECRET`. Set a secret (see §7B). |
+| Google button does nothing / errors | Firebase not configured, or `localhost` missing from **Authorized domains**, or you didn't restart after editing `.env`. |
+| "This account uses Google sign-in" on login | That email registered via Google (no password). Use **Continue with Google**, or reset the password. |
+| Reset email never arrives | In dev the link is only **logged to the backend console**. In prod, wire `deliverResetEmail()` (see §6). |
+| Verifications return "unknown" a lot | Outbound SMTP (port 25) is blocked by your host. Use a host that allows it. |
+| CORS error in the browser console | Add your frontend origin to `CORS_ORIGINS` and restart the backend. |
+| Changes to `.env` not taking effect | Restart the process — env is read at startup (Vite too). |
