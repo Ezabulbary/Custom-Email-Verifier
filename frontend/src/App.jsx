@@ -4,10 +4,11 @@ import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle
 import './App.css';
 import { googleSignIn } from './firebase';
 
-// API base URL. In production set VITE_API_URL (e.g. '' for same-origin behind
-// an nginx reverse proxy, or 'https://api.yourdomain.com'); defaults to the
-// local backend for development.
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
+// API base URL. Leave VITE_API_URL empty for local dev — requests then go to
+// the same origin and Vite's dev proxy (see vite.config.js) forwards them to
+// the backend, which avoids CORS and localhost/IPv6 issues. In production set
+// VITE_API_URL to your API origin (or '' if same-origin behind nginx).
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 // Brand / legal placeholders — replace with your real company details before
 // going live. The legal pages below are professional templates and should be
@@ -113,7 +114,21 @@ const apiFetch = async (endpoint, options = {}) => {
     window.location.href = '/login';
     throw new Error('Unauthorized');
   }
-  return response.json();
+
+  // Parse defensively: an empty or non-JSON body (proxy hiccup, crashed
+  // request, wrong API URL) must not blow up with "Unexpected end of JSON input".
+  // When the body IS valid JSON we return it as-is, so callers can keep checking
+  // `data.error` for handled (400/404/…) responses.
+  const text = await response.text();
+  if (!text) {
+    if (!response.ok) throw new Error(`Request failed (HTTP ${response.status}). Is the backend running and up to date?`);
+    return {};
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`The server returned an unexpected response (HTTP ${response.status}). Check that VITE_API_URL points to your backend.`);
+  }
 };
 
 // Turn a raw fetch/API failure into a message a person can act on. The most
@@ -981,11 +996,10 @@ const Register = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const data = await fetch(`${API_URL}/auth/register`, {
+      const data = await apiFetch('/auth/register', {
         method: 'POST',
-        headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ email, password })
-      }).then(r => r.json());
+      });
       if (data.error) throw new Error(data.error);
       alert('Registration successful! Please login.');
       navigate('/login');

@@ -84,10 +84,12 @@ npm run dev                   # starts Vite on http://localhost:5173
 
 Open the printed URL — **http://localhost:5173**.
 
-> **Important:** the frontend calls the backend at `VITE_API_URL`
-> (default `http://localhost:3001`). If the backend in Terminal 1 isn't running,
-> login/register will show **"Cannot reach the server."** — that's expected;
-> start the backend.
+> **Important:** in local dev, leave `VITE_API_URL` **empty** in `frontend/.env`.
+> The browser then calls the same origin and Vite's dev proxy (`vite.config.js`)
+> forwards `/auth`, `/verify`, `/history`, `/admin`, `/health` to the backend on
+> port 3001 — this avoids CORS and `localhost`/IPv6 problems. If you still see
+> **"Cannot reach the server"**, make sure the backend (Terminal 1) is running
+> and that `VITE_API_URL` is empty, then restart `npm run dev`.
 
 ---
 
@@ -344,7 +346,7 @@ buttons open it (put your Calendly / Cal.com link there).
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| "Cannot reach the server" on login/register | Backend not running, or `VITE_API_URL` wrong. Start `node server.js`. |
+| "Cannot reach the server" on login/register | Backend not running, or `VITE_API_URL` is set to a cross-origin URL. For dev, **leave `VITE_API_URL` empty** (uses the Vite proxy) and restart `npm run dev`; make sure `node server.js` is up on port 3001. |
 | Backend exits: "FATAL: JWT_SECRET must be set" | `NODE_ENV=production` without `JWT_SECRET`. Set a secret (see §7B). |
 | Google button does nothing / errors | Firebase not configured, or `localhost` missing from **Authorized domains**, or you didn't restart after editing `.env`. |
 | "This account uses Google sign-in" on login | That email registered via Google (no password). Use **Continue with Google**, or reset the password. |
