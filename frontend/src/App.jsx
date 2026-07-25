@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
-import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Star, Quote, Phone } from 'lucide-react';
+import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Star, Quote, Phone, User } from 'lucide-react';
 import './App.css';
 import { googleSignIn } from './firebase';
 
@@ -1081,6 +1081,7 @@ const DashboardLayout = ({ children }) => {
           <Link to="/dashboard/bulk" className={`nav-item ${location.pathname==='/dashboard/bulk'?'active':''}`}><List size={18}/> Bulk Verification</Link>
           <Link to="/dashboard/csv" className={`nav-item ${location.pathname==='/dashboard/csv'?'active':''}`}><Upload size={18}/> Clean a List</Link>
           <Link to="/dashboard/tasks" className={`nav-item ${location.pathname==='/dashboard/tasks'?'active':''}`}><History size={18}/> Tasks &amp; Results</Link>
+          <Link to="/dashboard/account" className={`nav-item ${location.pathname==='/dashboard/account'?'active':''}`}><User size={18}/> My Account</Link>
           {(user?.role === 'admin' || user?.role === 'superadmin') && (
             <Link to="/admin" className={`nav-item ${location.pathname==='/admin'?'active':''}`}><ShieldCheck size={18}/> Admin Panel</Link>
           )}
@@ -1330,6 +1331,55 @@ const DashboardHome = () => {
         ) : (
           <div className="history-empty">No verifications yet. Run a check from <strong>Email Verification</strong> and your stats will appear here.</div>
         )}
+      </div>
+    </div>
+  );
+};
+
+// --- My Account (self-only view, available to every signed-in user) ---
+
+const ACCOUNT_ROLE_LABELS = { user: 'User', admin: 'Admin', superadmin: 'Super Admin' };
+
+const MyAccount = () => {
+  const { user } = useAuth();
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    apiFetch('/history/stats/overview').then(d => { if (d && !d.error) setStats(d); }).catch(() => {});
+  }, []);
+
+  const totalEmails = stats?.totalEmails ?? 0;
+  const valid = stats?.counts?.valid ?? 0;
+  const validRate = totalEmails > 0 ? Math.round((valid / totalEmails) * 100) : 0;
+
+  return (
+    <div>
+      <div className="page-title">My Account</div>
+      <p style={{color:'var(--text-secondary)', marginTop:'-0.5rem', marginBottom:'1.25rem'}}>
+        Your account details and your own verification usage. Only you can see this.
+      </p>
+
+      <div className="card" style={{padding:'2rem', maxWidth:'640px'}}>
+        <div style={{display:'flex', alignItems:'center', gap:'1rem', marginBottom:'1.5rem'}}>
+          <div className="account-avatar">{(user?.email || '?').charAt(0).toUpperCase()}</div>
+          <div>
+            <div style={{fontWeight:700, fontSize:'1.1rem'}}>{user?.email}</div>
+            <span className={`badge role-${user?.role || 'user'}`}>{ACCOUNT_ROLE_LABELS[user?.role] || 'User'}</span>
+          </div>
+        </div>
+        <div className="account-rows">
+          <div className="account-row"><span>Email</span><strong>{user?.email}</strong></div>
+          <div className="account-row"><span>Role</span><strong>{ACCOUNT_ROLE_LABELS[user?.role] || 'User'}</strong></div>
+          <div className="account-row"><span>Available credits</span><strong>{(user?.credits ?? 0).toLocaleString()}</strong></div>
+        </div>
+      </div>
+
+      <h3 style={{fontSize:'1.05rem', margin:'2rem 0 1rem'}}>Your usage — last {stats?.retentionDays ?? 30} days</h3>
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:'1.25rem'}}>
+        <StatCard label="Emails Verified" value={totalEmails.toLocaleString()} />
+        <StatCard label="Executions" value={(stats?.executions ?? 0).toLocaleString()} />
+        <StatCard label="Lists Cleaned" value={stats?.listsCleaned ?? 0} />
+        <StatCard label="Valid Rate" value={`${validRate}%`} accent="#059669" />
       </div>
     </div>
   );
@@ -1784,6 +1834,7 @@ function AppRoutes() {
       <Route path="/dashboard/bulk" element={<ProtectedRoute><BulkVerify /></ProtectedRoute>} />
       <Route path="/dashboard/csv" element={<ProtectedRoute><CsvVerify /></ProtectedRoute>} />
       <Route path="/dashboard/tasks" element={<ProtectedRoute><TasksResults /></ProtectedRoute>} />
+      <Route path="/dashboard/account" element={<ProtectedRoute><MyAccount /></ProtectedRoute>} />
       <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPanel /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" />} />
     </Routes>
