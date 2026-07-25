@@ -99,6 +99,19 @@ const AuthProvider = ({ children }) => {
     } catch { /* ignore */ }
   }, []);
 
+  // Keep credits/profile fresh: re-fetch whenever the tab regains focus, so a
+  // change made elsewhere (e.g. an admin adjusting credits) shows up on return.
+  useEffect(() => {
+    const refreshIfLoggedIn = () => { if (localStorage.getItem('token')) refreshUser(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshIfLoggedIn(); };
+    window.addEventListener('focus', refreshIfLoggedIn);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', refreshIfLoggedIn);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [refreshUser]);
+
   return (
     <AuthContext.Provider value={{ user, login, logout, loading, setUser, refreshUser }}>
       {!loading && children}
@@ -1394,12 +1407,13 @@ const DonutBreakdown = ({ segments, total }) => {
 };
 
 const DashboardHome = () => {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [stats, setStats] = useState(null);
 
   useEffect(() => {
+    refreshUser(); // always show live credits when landing on Overview
     apiFetch('/history/stats/overview').then(d => { if (d && !d.error) setStats(d); }).catch(() => {});
-  }, []);
+  }, [refreshUser]);
 
   const totalEmails = stats?.totalEmails ?? 0;
   const counts = stats?.counts || { valid: 0, invalid: 0, catchAll: 0, unknown: 0, disposable: 0 };
@@ -1445,7 +1459,7 @@ const ACCOUNT_ROLE_LABELS = { user: 'User', admin: 'Admin', superadmin: 'Super A
 const EMPTY_PROFILE = { firstName: '', lastName: '', phone: '', address: '', city: '', zip: '', country: '', state: '' };
 
 const MyAccount = () => {
-  const { user, setUser } = useAuth();
+  const { user, setUser, refreshUser } = useAuth();
   const [form, setForm] = useState(EMPTY_PROFILE);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
@@ -1466,8 +1480,9 @@ const MyAccount = () => {
   }, [user]);
 
   useEffect(() => {
+    refreshUser(); // live credits/role on this page
     apiFetch('/history/stats/overview').then(d => { if (d && !d.error) setStats(d); }).catch(() => {});
-  }, []);
+  }, [refreshUser]);
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
 
@@ -1899,7 +1914,7 @@ const TasksResults = () => {
 const ROLE_LABELS = { user: 'User', admin: 'Admin', superadmin: 'Super Admin' };
 
 const AdminPanel = () => {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1925,6 +1940,9 @@ const AdminPanel = () => {
     const data = await apiFetch(`/admin/users/${id}/credits`, { method: 'POST', body: JSON.stringify({ delta }) });
     if (data.error) return alert(data.error);
     setUsers(us => us.map(u => u.id === id ? { ...u, credits: data.credits } : u));
+    // If the admin changed their OWN credits, refresh the auth user so the
+    // sidebar and Overview reflect it immediately (no page reload needed).
+    if (String(id) === String(user.id)) refreshUser();
   };
   const setRole = async (u, role) => {
     if (role === u.role) return;
