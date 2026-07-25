@@ -893,3 +893,11 @@
   font-weight: 600; color: var(--accent-color); font-size: 0.95rem;
 }
 .sidebar-credits strong { color: var(--text-primary); }
+
+/* --- Job progress bar (bulk/CSV) --- */
+.job-progress { margin-top: 1.25rem; padding: 1rem 1.25rem; background: #f8fafc; border: 1px solid var(--border-color); border-radius: 12px; }
+.job-progress-head { display: flex; justify-content: space-between; align-items: center; font-size: 0.92rem; color: var(--text-primary); margin-bottom: 0.6rem; }
+.job-progress-head span { display: inline-flex; align-items: center; gap: 0.5rem; }
+.job-progress-track { height: 8px; background: var(--border-color); border-radius: 99px; overflow: hidden; }
+.job-progress-fill { height: 100%; background: var(--accent-color); border-radius: 99px; transition: width 0.4s ease; }
+.job-progress-note { display: block; margin-top: 0.5rem; font-size: 0.78rem; color: var(--text-secondary); }

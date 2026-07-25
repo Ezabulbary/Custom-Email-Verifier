@@ -29,11 +29,11 @@ const app = express();
 
 console.log(`[Store] Active data store: ${store.backend.toUpperCase()}`);
 
-// Limit uploads: max 2 MB and only accept CSV files, to avoid disk/CPU DoS
-// from arbitrarily large or non-CSV uploads.
+// Limit uploads: max 15 MB and only accept CSV files, to avoid disk/CPU DoS
+// from arbitrarily large or non-CSV uploads (15 MB comfortably holds 100k+ rows).
 const upload = multer({
     dest: 'uploads/',
-    limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+    limits: { fileSize: 15 * 1024 * 1024, files: 1 },
     fileFilter: (req, file, cb) => {
         const isCsv = file.mimetype === 'text/csv'
             || file.mimetype === 'application/vnd.ms-excel'
@@ -46,7 +46,8 @@ const upload = multer({
 // when no allow-list is set (development convenience).
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
 app.use(cors(allowedOrigins.length ? { origin: allowedOrigins } : {}));
-app.use(express.json({ limit: '1mb' }));
+// Large bulk pastes (10k+ emails) need a bigger JSON body limit.
+app.use(express.json({ limit: '15mb' }));
 
 // Never ship a hardcoded secret: require JWT_SECRET in production. In
 // development, if none is set, persist a generated secret to a local file so
@@ -397,6 +398,15 @@ setInterval(cleanupHistory, 6 * 60 * 60 * 1000);
 
 // --- Verification Endpoints (Protected) ---
 
+// A credit is charged ONLY for emails we could conclusively check. A 'unknown'
+// result means verification failed (SMTP unreachable, timeout, greylisting) —
+// those are never charged.
+const CHARGEABLE = new Set(['valid', 'invalid', 'catch-all']);
+const chargeableCount = (results) => results.reduce((n, r) => n + (r && CHARGEABLE.has(r.status) ? 1 : 0), 0);
+
+// How many emails to verify concurrently in bulk/CSV runs.
+const VERIFY_CONCURRENCY = Math.max(1, parseInt(process.env.VERIFY_CONCURRENCY, 10) || 10);
+
 app.post('/verify', authenticateToken, async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
@@ -407,54 +417,96 @@ app.post('/verify', authenticateToken, async (req, res) => {
         if (user.credits < 1) return res.status(402).json({ error: 'Insufficient credits' });
 
         const result = await verifyEmail(email);
-        await store.deductCredits(req.user.id, 1);
+        // Only charge if the check produced a conclusive verdict.
+        const charge = CHARGEABLE.has(result.status) ? 1 : 0;
+        if (charge) await store.deductCredits(req.user.id, charge);
         const batch = await saveBatch(req.user.id, 'single', [result], (req.body.name || '').toString().slice(0, 120) || null);
 
-        res.json({ ...result, batchId: batch && batch.id, batchNumber: batch && batch.batchNumber });
+        res.json({ ...result, charged: charge, batchId: batch && batch.id, batchNumber: batch && batch.batchNumber });
     } catch (err) {
         console.error('Verify error:', err.message);
         res.status(500).json({ error: 'Verification failed' });
     }
 });
 
-async function asyncPool(poolLimit, array, iteratorFn) {
-    const ret = [];
-    const executing = [];
-    for (const item of array) {
-        const p = Promise.resolve().then(() => iteratorFn(item, array));
-        ret.push(p);
-        if (poolLimit <= array.length) {
-            const e = p.then(() => executing.splice(executing.indexOf(e), 1));
-            executing.push(e);
-            if (executing.length >= poolLimit) {
-                await Promise.race(executing);
-            }
+// Bounded-concurrency pool that processes EVERY item (never skips) and reports
+// progress after each one completes.
+async function asyncPoolProgress(poolLimit, array, iteratorFn, onDone) {
+    const results = new Array(array.length);
+    let next = 0;
+    async function worker() {
+        while (next < array.length) {
+            const i = next++;
+            try { results[i] = await iteratorFn(array[i], i); }
+            catch (e) { results[i] = { email: array[i], status: 'unknown', reason: 'Verification error', confidence: 0 }; }
+            if (onDone) onDone();
         }
     }
-    return Promise.all(ret);
+    const n = Math.min(poolLimit, array.length) || 1;
+    await Promise.all(Array.from({ length: n }, worker));
+    return results;
+}
+
+// --- Background verification jobs ---
+// Large bulk/CSV runs are processed in the background so the HTTP request returns
+// immediately (no request timeout) and every address is verified (no skips).
+// Progress is polled via GET /verify/status/:jobId; the finished batch is saved
+// to the store on completion.
+const jobs = new Map();
+let jobSeq = 0;
+const makeJobId = () => `job_${jobSeq++}_${Math.round(process.hrtime()[1])}`;
+
+async function runJob(job) {
+    try {
+        job.results = await asyncPoolProgress(
+            VERIFY_CONCURRENCY, job.emails,
+            (email) => verifyEmail(email),
+            () => { job.processed++; }
+        );
+        // Charge only for emails that were successfully checked.
+        const charge = chargeableCount(job.results);
+        if (charge > 0) await store.deductCredits(job.userId, charge);
+        const batch = await saveBatch(job.userId, job.type, job.results, job.name);
+        job.batchId = batch && batch.id;
+        job.batchNumber = batch && batch.batchNumber;
+        job.charged = charge;
+        job.status = 'completed';
+    } catch (err) {
+        console.error('Job error:', err.message);
+        job.status = 'error';
+        job.error = 'Verification failed';
+    }
+    // Free the job from memory a while after it finishes.
+    setTimeout(() => jobs.delete(job.id), 10 * 60 * 1000);
+}
+
+async function startVerificationJob(req, res, type, emails, name) {
+    const user = await store.getUserById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    // Require enough credits for the whole list up front (only successful checks
+    // are actually charged when the job finishes).
+    if (user.credits < emails.length) {
+        return res.status(402).json({ error: `Insufficient credits: need ${emails.length}, have ${user.credits}` });
+    }
+    const job = {
+        id: makeJobId(), userId: req.user.id, type, name,
+        emails, total: emails.length, processed: 0,
+        results: null, status: 'processing', createdAt: Date.now(),
+    };
+    jobs.set(job.id, job);
+    runJob(job); // fire-and-forget; progress via /verify/status/:jobId
+    res.json({ jobId: job.id, total: job.total, status: 'processing' });
 }
 
 app.post('/verify/bulk', authenticateToken, async (req, res) => {
-    const { emails } = req.body;
+    const emails = Array.isArray(req.body.emails)
+        ? req.body.emails.map(e => String(e).trim()).filter(Boolean) : null;
     const name = (req.body.name || '').toString().slice(0, 120) || null;
-    if (!emails || !Array.isArray(emails) || emails.length === 0) {
+    if (!emails || emails.length === 0) {
         return res.status(400).json({ error: 'Array of emails is required' });
     }
-
     try {
-        const user = await store.getUserById(req.user.id);
-        if (!user) return res.status(404).json({ error: 'User not found' });
-        if (user.credits < emails.length) {
-            return res.status(402).json({ error: `Insufficient credits: need ${emails.length}, have ${user.credits}` });
-        }
-
-        const results = await asyncPool(5, emails, async (email) => {
-            return await verifyEmail(email);
-        });
-
-        await store.deductCredits(req.user.id, results.length);
-        const batch = await saveBatch(req.user.id, 'bulk', results, name);
-        res.json({ total: results.length, results, batchId: batch && batch.id, batchNumber: batch && batch.batchNumber });
+        await startVerificationJob(req, res, 'bulk', emails, name);
     } catch (err) {
         console.error('Bulk verify error:', err.message);
         res.status(500).json({ error: 'Bulk verification failed' });
@@ -471,30 +523,16 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => 
         .on('data', (row) => {
             const emailKey = Object.keys(row).find(k => k.toLowerCase().includes('email')) || Object.keys(row)[0];
             if (emailKey && row[emailKey]) {
-                emails.push(row[emailKey].trim());
+                emails.push(String(row[emailKey]).trim());
             }
         })
         .on('end', async () => {
             fs.unlink(req.file.path, () => {});
-
             if (emails.length === 0) {
                 return res.status(400).json({ error: 'No emails found in CSV' });
             }
-
             try {
-                const user = await store.getUserById(req.user.id);
-                if (!user) return res.status(404).json({ error: 'User not found' });
-                if (user.credits < emails.length) {
-                    return res.status(402).json({ error: `Insufficient credits: need ${emails.length}, have ${user.credits}` });
-                }
-
-                const results = await asyncPool(5, emails, async (email) => {
-                    return await verifyEmail(email);
-                });
-
-                await store.deductCredits(req.user.id, results.length);
-                const batch = await saveBatch(req.user.id, 'csv', results, name);
-                res.json({ total: results.length, results, batchId: batch && batch.id, batchNumber: batch && batch.batchNumber });
+                await startVerificationJob(req, res, 'csv', emails, name);
             } catch (err) {
                 console.error('CSV verify error:', err.message);
                 res.status(500).json({ error: 'CSV verification failed' });
@@ -504,6 +542,19 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => 
             fs.unlink(req.file.path, () => {});
             res.status(500).json({ error: 'Failed to parse CSV' });
         });
+});
+
+// Poll the progress of a background bulk/CSV job.
+app.get('/verify/status/:jobId', authenticateToken, (req, res) => {
+    const job = jobs.get(req.params.jobId);
+    if (!job || String(job.userId) !== String(req.user.id)) {
+        return res.status(404).json({ error: 'Job not found' });
+    }
+    res.json({
+        status: job.status, processed: job.processed, total: job.total,
+        batchId: job.batchId, batchNumber: job.batchNumber,
+        charged: job.charged, error: job.error,
+    });
 });
 
 // --- History / Tasks Endpoints (Protected) ---

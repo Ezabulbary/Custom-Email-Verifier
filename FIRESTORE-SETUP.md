@@ -17,9 +17,9 @@ everything automatically on first use. You only need 2 things on the server.
 
 ## Step 2 — `.env` (JWT secret)
 
-Once `serviceAccount.json` is present, Firestore turns on **automatically** — you
-do NOT need `USE_FIRESTORE=1`. All data then saves to Firestore only; SQLite is
-not used (no `users.sqlite` is created).
+Firestore is this app's **only** data store — once `serviceAccount.json` is
+present it turns on automatically (no flag needed). If no service account is
+configured, the server refuses to start.
 
 Just set a `JWT_SECRET` in **`.env`** (project root):
 
@@ -29,8 +29,6 @@ JWT_SECRET=fe9067b9058955ee99f3fddd3a0372220b53cfcf795a68c3b31b878abec346acb2577
 
 (The `JWT_SECRET` above was generated for you — keep it private. Generate your own
 with `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`.)
-
-> To force local SQLite even with Firebase configured, set `USE_FIRESTORE=0`.
 
 ## Step 3 — Run
 
@@ -59,9 +57,8 @@ tab — you'll see the `users` collection (and `users/<email>/batches`) appear.
 
 ## Notes
 
-- **SQLite ↔ Firestore are separate stores.** Switching does not copy old data.
-  Since you're starting fresh, that's fine.
-- To go back to SQLite, remove `USE_FIRESTORE=1` (or set it to `0`).
-- If the log says `Active data store: SQLITE`, check that (a) `serviceAccount.json`
-  is in the project root, and (b) `USE_FIRESTORE=1` is in `.env`. The startup log
-  prints exactly why it fell back.
+- **Firestore is the only data store** — there is no local database. If the
+  service account is missing or invalid, the server prints a clear `[FATAL]`
+  message and exits, telling you exactly what to fix.
+- Data (users + verification batches) lives under `users/` and
+  `users/<email>/batches/` in Firestore, retained ~30 days.

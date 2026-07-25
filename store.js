@@ -16,11 +16,6 @@
 
 const { isFirestoreEnabled, getFirestore } = require('./firebaseAdmin');
 
-// SQLite is loaded lazily — only when it's actually the active store — so that
-// running on Firestore never opens a connection or creates users.sqlite.
-let _db = null;
-const db = () => (_db || (_db = require('./db')));
-
 const HISTORY_RETENTION_DAYS = 30;
 const HISTORY_MAX_STORED_RESULTS = 5000;   // cap stored payload per execution
 const FIRESTORE_MAX_DOC_BYTES = 900 * 1024; // stay safely under Firestore's 1 MB doc limit
@@ -61,221 +56,6 @@ function cleanProfile(fields) {
     }
     return out;
 }
-
-// ===========================================================================
-// SQLite implementation
-// ===========================================================================
-
-const sql = {
-    get: (q, p = []) => new Promise((res, rej) => db().get(q, p, (e, row) => e ? rej(e) : res(row || null))),
-    all: (q, p = []) => new Promise((res, rej) => db().all(q, p, (e, rows) => e ? rej(e) : res(rows || []))),
-    run: (q, p = []) => new Promise((res, rej) => db().run(q, p, function (e) { e ? rej(e) : res(this); })),
-};
-
-const sqliteStore = {
-    async findUserByEmail(email) {
-        return sql.get(`SELECT * FROM users WHERE lower(email) = lower(?)`, [email]);
-    },
-    async getUserById(id) {
-        const cols = PROFILE_FIELDS.map(([, snake]) => snake).join(', ');
-        const row = await sql.get(`SELECT id, email, credits, role, ${cols} FROM users WHERE id = ?`, [id]);
-        if (!row) return null;
-        const view = { id: row.id, email: row.email, credits: row.credits, role: row.role };
-        for (const [camel, snake] of PROFILE_FIELDS) view[camel] = row[snake] || '';
-        return view;
-    },
-    async getPasswordById(id) {
-        const row = await sql.get(`SELECT password FROM users WHERE id = ?`, [id]);
-        return row ? row.password : null;
-    },
-    async updateProfile(id, fields) {
-        const clean = cleanProfile(fields);
-        const keys = Object.keys(clean);
-        if (keys.length === 0) return;
-        const setClause = keys.map(k => {
-            const snake = PROFILE_FIELDS.find(([camel]) => camel === k)[1];
-            return `${snake} = ?`;
-        }).join(', ');
-        const params = keys.map(k => clean[k]);
-        params.push(id);
-        await sql.run(`UPDATE users SET ${setClause} WHERE id = ?`, params);
-    },
-    async getRoleById(id) {
-        const row = await sql.get(`SELECT role FROM users WHERE id = ?`, [id]);
-        return row ? row.role : null;
-    },
-    async countUsers() {
-        const row = await sql.get(`SELECT COUNT(*) AS n FROM users`, []);
-        return row ? row.n : 0;
-    },
-    async createUser({ email, password, credits, role }) {
-        try {
-            const r = await sql.run(
-                `INSERT INTO users (email, password, credits, role) VALUES (?, ?, ?, ?)`,
-                [email, password ?? null, credits, role]
-            );
-            return { id: r.lastID, email, credits, role };
-        } catch (e) {
-            if (String(e.message).includes('UNIQUE constraint failed')) {
-                const err = new Error('Email already exists'); err.code = 'EMAIL_EXISTS'; throw err;
-            }
-            throw e;
-        }
-    },
-    async setPassword(id, hash) {
-        await sql.run(`UPDATE users SET password = ? WHERE id = ?`, [hash, id]);
-    },
-    async setRole(id, role) {
-        const r = await sql.run(`UPDATE users SET role = ? WHERE id = ?`, [role, id]);
-        return r.changes;
-    },
-    async adjustCredits(id, delta) {
-        await sql.run(`UPDATE users SET credits = MAX(credits + ?, 0) WHERE id = ?`, [delta, id]);
-        const row = await sql.get(`SELECT credits FROM users WHERE id = ?`, [id]);
-        return row ? row.credits : null;
-    },
-    async deductCredits(id, amount) {
-        await sql.run(`UPDATE users SET credits = MAX(credits - ?, 0) WHERE id = ?`, [amount, id]);
-    },
-    async deleteUser(id) {
-        const r = await sql.run(`DELETE FROM users WHERE id = ?`, [id]);
-        await sql.run(`DELETE FROM history WHERE user_id = ?`, [id]);
-        return r.changes;
-    },
-    async promoteByEmail(email, role, { skipIfSuperadmin = false } = {}) {
-        const guard = skipIfSuperadmin ? ` AND role != 'superadmin'` : '';
-        const r = await sql.run(`UPDATE users SET role = ? WHERE lower(email) = lower(?)${guard}`, [role, email]);
-        return r.changes;
-    },
-    async listUsers({ hideSuper }) {
-        const where = hideSuper ? `WHERE u.role != 'superadmin'` : '';
-        return sql.all(
-            `SELECT u.id, u.email, u.credits, u.role, u.created_at,
-                    COALESCE(SUM(h.total), 0) AS emails_verified,
-                    COUNT(h.id) AS executions
-             FROM users u
-             LEFT JOIN history h ON h.user_id = u.id
-             ${where}
-             GROUP BY u.id
-             ORDER BY u.id ASC`, []
-        );
-    },
-
-    // Password resets
-    async createReset(userId, tokenHash, expiresAt) {
-        await sql.run(`INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, ?)`,
-            [userId, tokenHash, expiresAt]);
-    },
-    async getActiveReset(tokenHash) {
-        return sql.get(`SELECT * FROM password_resets WHERE token_hash = ? AND used = 0`, [tokenHash]);
-    },
-    async consumeUserResets(userId) {
-        await sql.run(`UPDATE password_resets SET used = 1 WHERE user_id = ?`, [userId]);
-    },
-
-    // Batches
-    async createBatch(userId, { type, name, results }) {
-        const s = summarize(results);
-        const stored = JSON.stringify(results.slice(0, HISTORY_MAX_STORED_RESULTS));
-        const r = await sql.run(
-            `INSERT INTO history
-                (user_id, batch_number, name, type, total, valid_count, invalid_count,
-                 catch_all_count, unknown_count, disposable_count, results)
-             VALUES (?,
-                (SELECT COALESCE(MAX(batch_number),0)+1 FROM history WHERE user_id = ?),
-                ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [userId, userId, name || null, type, s.total, s.valid, s.invalid, s.catchAll, s.unknown, s.disposable, stored]
-        );
-        const row = await sql.get(`SELECT batch_number, created_at FROM history WHERE id = ?`, [r.lastID]);
-        return {
-            id: r.lastID,
-            batchNumber: row ? row.batch_number : null,
-            name: name || null,
-            type,
-            total: s.total,
-            counts: countsFrom(s),
-            createdAt: row ? row.created_at : null,
-        };
-    },
-    async listBatches(userId, { type, limit }) {
-        const params = [userId, `-${HISTORY_RETENTION_DAYS} days`];
-        let q = `SELECT id, batch_number, name, type, total, valid_count, invalid_count,
-                        catch_all_count, unknown_count, disposable_count, created_at
-                 FROM history
-                 WHERE user_id = ? AND created_at >= datetime('now', ?)`;
-        if (type) { q += ` AND type = ?`; params.push(type); }
-        q += ` ORDER BY datetime(created_at) DESC, id DESC LIMIT ?`;
-        params.push(limit);
-        const rows = await sql.all(q, params);
-        return rows.map(r => ({
-            id: r.id,
-            batchNumber: r.batch_number,
-            name: r.name,
-            type: r.type,
-            total: r.total,
-            counts: { valid: r.valid_count, invalid: r.invalid_count, catchAll: r.catch_all_count, unknown: r.unknown_count, disposable: r.disposable_count },
-            createdAt: r.created_at,
-        }));
-    },
-    async getBatch(userId, id) {
-        const r = await sql.get(
-            `SELECT id, batch_number, name, type, total, valid_count, invalid_count,
-                    catch_all_count, unknown_count, disposable_count, results, created_at
-             FROM history WHERE id = ? AND user_id = ?`, [id, userId]
-        );
-        if (!r) return null;
-        let results = [];
-        try { results = JSON.parse(r.results) || []; } catch { results = []; }
-        return {
-            id: r.id,
-            batchNumber: r.batch_number,
-            name: r.name,
-            type: r.type,
-            total: r.total,
-            counts: { valid: r.valid_count, invalid: r.invalid_count, catchAll: r.catch_all_count, unknown: r.unknown_count, disposable: r.disposable_count },
-            results,
-            createdAt: r.created_at,
-        };
-    },
-    async userStats(userId) {
-        const row = await sql.get(
-            `SELECT COUNT(*) AS executions,
-                    COALESCE(SUM(total),0) AS total_emails,
-                    COALESCE(SUM(valid_count),0) AS valid,
-                    COALESCE(SUM(invalid_count),0) AS invalid,
-                    COALESCE(SUM(catch_all_count),0) AS catch_all,
-                    COALESCE(SUM(unknown_count),0) AS unknown,
-                    COALESCE(SUM(disposable_count),0) AS disposable,
-                    COALESCE(SUM(CASE WHEN type='csv' THEN 1 ELSE 0 END),0) AS lists_cleaned
-             FROM history
-             WHERE user_id = ? AND created_at >= datetime('now', ?)`,
-            [userId, `-${HISTORY_RETENTION_DAYS} days`]
-        );
-        return {
-            executions: row.executions,
-            totalEmails: row.total_emails,
-            listsCleaned: row.lists_cleaned,
-            counts: { valid: row.valid, invalid: row.invalid, catchAll: row.catch_all, unknown: row.unknown, disposable: row.disposable },
-        };
-    },
-    async cleanupOldBatches() {
-        await sql.run(`DELETE FROM history WHERE created_at < datetime('now', ?)`, [`-${HISTORY_RETENTION_DAYS} days`]);
-    },
-    async adminStats({ viewerRole }) {
-        const superFilter = viewerRole === 'superadmin' ? '' : `WHERE role != 'superadmin'`;
-        return sql.get(
-            `SELECT
-                (SELECT COUNT(*) FROM users ${superFilter}) AS total_users,
-                (SELECT COUNT(*) FROM users WHERE role = 'admin') AS admins,
-                (SELECT COUNT(*) FROM users WHERE role = 'superadmin') AS superadmins,
-                (SELECT COALESCE(SUM(credits),0) FROM users ${superFilter}) AS total_credits,
-                (SELECT COUNT(*) FROM history) AS total_executions,
-                (SELECT COALESCE(SUM(total),0) FROM history) AS total_emails,
-                (SELECT COALESCE(SUM(valid_count),0) FROM history) AS total_valid`,
-            []
-        );
-    },
-};
 
 // ===========================================================================
 // Firestore implementation
@@ -467,10 +247,12 @@ function firestoreStore() {
             const bref = uref.collection('batches').doc();
             const s = summarize(results);
             const stored = JSON.stringify(fitResults(results));
+            // Global, ever-unique task number via a shared counter doc (starts at 1001).
+            const counterRef = fs.collection('meta').doc('counters');
             const batchNumber = await fs.runTransaction(async (tx) => {
-                const usnap = await tx.get(uref);
-                const seq = ((usnap.exists && usnap.data().batchSeq) || 0) + 1;
-                tx.update(uref, { batchSeq: seq });
+                const csnap = await tx.get(counterRef);
+                const seq = ((csnap.exists && csnap.data().batchSeq) || 1000) + 1;
+                tx.set(counterRef, { batchSeq: seq }, { merge: true });
                 tx.set(bref, {
                     batchNumber: seq, name: name || null, type,
                     total: s.total, valid: s.valid, invalid: s.invalid,
@@ -567,15 +349,26 @@ function firestoreStore() {
 }
 
 // ===========================================================================
-// Selector
+// Selector — Cloud Firestore only
 // ===========================================================================
 
-const usingFirestore = isFirestoreEnabled();
-const impl = usingFirestore ? firestoreStore() : sqliteStore;
+// This app stores ALL data in Cloud Firestore. A Firebase service account must
+// be configured (see FIRESTORE-SETUP.md); there is no local-database fallback.
+if (!isFirestoreEnabled()) {
+    console.error('\n[FATAL] Cloud Firestore is required but not configured.');
+    console.error('  Add a Firebase service account and try again:');
+    console.error('    1. Put serviceAccount.json in the project root, OR set');
+    console.error('       FIREBASE_SERVICE_ACCOUNT / GOOGLE_APPLICATION_CREDENTIALS');
+    console.error('    2. Create the Firestore database in the Firebase console');
+    console.error('  See FIRESTORE-SETUP.md for step-by-step instructions.\n');
+    process.exit(1);
+}
+
+const impl = firestoreStore();
 
 module.exports = {
     ...impl,
-    backend: usingFirestore ? 'firestore' : 'sqlite',
+    backend: 'firestore',
     HISTORY_RETENTION_DAYS,
     summarize,
 };

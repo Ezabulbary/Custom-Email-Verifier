@@ -90,10 +90,48 @@ const AuthProvider = ({ children }) => {
     setUser(null);
   };
 
+  // Re-fetch the authoritative user (credits, profile) from the server so the
+  // UI — e.g. the sidebar Credits — always reflects the real value.
+  const refreshUser = useCallback(async () => {
+    try {
+      const d = await apiFetch('/auth/me');
+      if (d && !d.error) setUser(d);
+    } catch { /* ignore */ }
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading, setUser }}>
+    <AuthContext.Provider value={{ user, login, logout, loading, setUser, refreshUser }}>
       {!loading && children}
     </AuthContext.Provider>
+  );
+};
+
+// Poll a background bulk/CSV verification job until it finishes, reporting
+// progress along the way. Resolves with the final status (incl. batchId).
+const pollJob = async (jobId, onProgress) => {
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const s = await apiFetch(`/verify/status/${jobId}`);
+    if (s.error) throw new Error(s.error);
+    if (onProgress) onProgress(s.processed || 0, s.total || 0);
+    if (s.status === 'completed') return s;
+    if (s.status === 'error') throw new Error(s.error || 'Verification failed');
+    await new Promise(r => setTimeout(r, 1500));
+  }
+};
+
+// Simple progress bar for running jobs.
+const JobProgress = ({ processed, total }) => {
+  const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+  return (
+    <div className="job-progress">
+      <div className="job-progress-head">
+        <span><Loader2 className="loader" size={15} /> Verifying… {processed.toLocaleString()} / {total.toLocaleString()}</span>
+        <strong>{pct}%</strong>
+      </div>
+      <div className="job-progress-track"><div className="job-progress-fill" style={{ width: `${pct}%` }} /></div>
+      <span className="job-progress-note">Large lists are processed in the background — every address is checked, nothing is skipped.</span>
+    </div>
   );
 };
 
@@ -1162,7 +1200,7 @@ const SingleVerify = () => {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [historyVersion, setHistoryVersion] = useState(0);
-  const { setUser, user } = useAuth();
+  const { refreshUser } = useAuth();
 
   const handleVerify = async (e) => {
     e.preventDefault();
@@ -1172,7 +1210,7 @@ const SingleVerify = () => {
       const data = await apiFetch('/verify', { method: 'POST', body: JSON.stringify({ email }) });
       if (data.error) throw new Error(data.error);
       setResult(data);
-      setUser({...user, credits: user.credits - 1});
+      await refreshUser();            // live, accurate credits
       setHistoryVersion(v => v + 1);
     } catch(err) { alert(err.message); }
     setLoading(false);
@@ -1200,22 +1238,26 @@ const BulkVerify = () => {
   const [emails, setEmails] = useState('');
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(null);
   const [results, setResults] = useState([]);
   const [historyVersion, setHistoryVersion] = useState(0);
-  const { setUser, user } = useAuth();
+  const { refreshUser } = useAuth();
 
   const handleVerify = async (e) => {
     e.preventDefault();
     const arr = emails.split('\n').map(e=>e.trim()).filter(e=>e);
     if(arr.length === 0) return;
-    setLoading(true);
+    setLoading(true); setResults([]); setProgress({ processed: 0, total: arr.length });
     try {
-      const data = await apiFetch('/verify/bulk', { method: 'POST', body: JSON.stringify({ emails: arr, name: name.trim() || undefined }) });
-      if (data.error) throw new Error(data.error);
-      setResults(data.results);
-      setUser({...user, credits: user.credits - data.results.length});
+      const job = await apiFetch('/verify/bulk', { method: 'POST', body: JSON.stringify({ emails: arr, name: name.trim() || undefined }) });
+      if (job.error) throw new Error(job.error);
+      const done = await pollJob(job.jobId, (p, t) => setProgress({ processed: p, total: t }));
+      const batch = await apiFetch(`/history/${done.batchId}`);
+      setResults((batch && batch.results) || []);
+      await refreshUser();            // live, accurate credits
       setHistoryVersion(v => v + 1);
     } catch(err) { alert(err.message); }
+    setProgress(null);
     setLoading(false);
   };
 
@@ -1232,6 +1274,7 @@ const BulkVerify = () => {
             {loading ? <Loader2 className="loader" size={18}/> : <List size={18}/>} Verify List
           </button>
         </form>
+        {progress && <JobProgress processed={progress.processed} total={progress.total} />}
         <ResultsTable results={results} />
       </div>
       <HistoryPanel type="bulk" version={historyVersion} />
@@ -1243,9 +1286,10 @@ const CsvVerify = () => {
   const [file, setFile] = useState(null);
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(null);
   const [results, setResults] = useState([]);
   const [historyVersion, setHistoryVersion] = useState(0);
-  const { setUser, user } = useAuth();
+  const { refreshUser } = useAuth();
   const fileInputRef = React.useRef(null);
 
   const handleUpload = async () => {
@@ -1253,15 +1297,19 @@ const CsvVerify = () => {
     const formData = new FormData();
     formData.append('file', file);
     if (name.trim()) formData.append('name', name.trim());
-    setLoading(true);
+    setLoading(true); setResults([]); setProgress({ processed: 0, total: 0 });
     try {
-      const data = await apiFetch('/verify/csv', { method: 'POST', body: formData });
-      if (data.error) throw new Error(data.error);
-      setResults(data.results);
-      setUser({...user, credits: user.credits - data.results.length});
+      const job = await apiFetch('/verify/csv', { method: 'POST', body: formData });
+      if (job.error) throw new Error(job.error);
+      setProgress({ processed: 0, total: job.total });
+      const done = await pollJob(job.jobId, (p, t) => setProgress({ processed: p, total: t }));
+      const batch = await apiFetch(`/history/${done.batchId}`);
+      setResults((batch && batch.results) || []);
+      await refreshUser();            // live, accurate credits
       setFile(null);
       setHistoryVersion(v => v + 1);
     } catch(err) { alert(err.message); }
+    setProgress(null);
     setLoading(false);
   };
 
@@ -1291,6 +1339,7 @@ const CsvVerify = () => {
         <button onClick={handleUpload} className="btn-primary" disabled={!file || loading} style={{marginTop:'1.5rem', width:'max-content'}}>
           {loading ? <Loader2 className="loader" size={18}/> : <Upload size={18}/>} Process CSV List
         </button>
+        {progress && <JobProgress processed={progress.processed} total={progress.total} />}
         <ResultsTable results={results} />
       </div>
       <HistoryPanel type="csv" version={historyVersion} />
