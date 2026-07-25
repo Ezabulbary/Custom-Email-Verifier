@@ -847,3 +847,40 @@
 .account-rows { display: flex; flex-direction: column; gap: 0.5rem; }
 .account-row { display: flex; justify-content: space-between; align-items: center; padding: 0.7rem 0; border-top: 1px solid var(--border-color); }
 .account-row span { color: var(--text-secondary); }
+
+/* --- Profile dropdown (top-right account menu) --- */
+.top-header { justify-content: flex-end; gap: 1rem; }
+.profile-menu { position: relative; }
+.profile-trigger { display: flex; align-items: center; gap: 0.6rem; background: transparent; border: 1px solid transparent; border-radius: 12px; padding: 0.35rem 0.6rem; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; }
+.profile-trigger:hover { background: #f1f5f9; border-color: var(--border-color); }
+.profile-avatar-sm { width: 34px; height: 34px; border-radius: 50%; background: var(--accent-color); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.95rem; flex-shrink: 0; }
+.profile-trigger-text { display: flex; flex-direction: column; line-height: 1.15; text-align: left; }
+.profile-trigger-text strong { font-size: 0.9rem; color: var(--text-primary); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-trigger-text small { font-size: 0.72rem; color: var(--text-secondary); }
+.profile-caret { color: var(--text-secondary); flex-shrink: 0; }
+.profile-dropdown { position: absolute; top: calc(100% + 8px); right: 0; min-width: 230px; background: var(--bg-surface, #fff); border: 1px solid var(--border-color); border-radius: 12px; box-shadow: 0 12px 32px rgba(15,23,42,0.14); padding: 0.4rem; z-index: 100; }
+.profile-dropdown-head { padding: 0.6rem 0.75rem; font-size: 0.75rem; color: var(--text-secondary); text-align: center; border-bottom: 1px solid var(--border-color); margin-bottom: 0.35rem; }
+.profile-dropdown-head span { display: block; color: var(--text-primary); font-weight: 600; font-size: 0.85rem; margin-top: 2px; word-break: break-all; }
+.profile-dropdown button { display: flex; align-items: center; gap: 0.6rem; width: 100%; text-align: left; background: transparent; border: none; padding: 0.6rem 0.75rem; border-radius: 8px; font-size: 0.9rem; color: var(--text-primary); cursor: pointer; }
+.profile-dropdown button:hover { background: #f1f5f9; }
+.profile-dropdown button.danger { color: #dc2626; }
+.profile-dropdown button.danger:hover { background: #fef2f2; }
+
+/* --- Profile Settings page --- */
+.profile-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; align-items: start; }
+.profile-side { display: flex; flex-direction: column; }
+.profile-id-row { display: flex; gap: 1.25rem; align-items: flex-start; margin-top: 1rem; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1rem; }
+.three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 1rem; }
+.field { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.9rem; }
+.field label { font-size: 0.82rem; font-weight: 600; color: var(--text-secondary); }
+.muted { color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.15rem; }
+.account-avatar.lg { width: 88px; height: 88px; font-size: 2.2rem; }
+.save-row { display: flex; align-items: center; justify-content: flex-end; gap: 1rem; margin-top: 0.5rem; }
+.save-ok { color: #059669; font-weight: 600; display: inline-flex; align-items: center; gap: 0.4rem; }
+
+@media (max-width: 900px) {
+  .profile-grid { grid-template-columns: 1fr; }
+  .three-col { grid-template-columns: 1fr; }
+  .profile-trigger-text { display: none; }
+}

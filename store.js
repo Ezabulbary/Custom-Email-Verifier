@@ -40,6 +40,24 @@ function summarize(results) {
 
 const countsFrom = (s) => ({ valid: s.valid, invalid: s.invalid, catchAll: s.catchAll, unknown: s.unknown, disposable: s.disposable });
 
+// Editable profile fields, as camelCase (frontend/API) ↔ snake_case (SQLite).
+const PROFILE_FIELDS = [
+    ['firstName', 'first_name'], ['lastName', 'last_name'], ['phone', 'phone'],
+    ['address', 'address'], ['city', 'city'], ['zip', 'zip'],
+    ['country', 'country'], ['state', 'state'],
+];
+
+// Keep only known profile keys, coerce to trimmed strings (max 200 chars).
+function cleanProfile(fields) {
+    const out = {};
+    for (const [camel] of PROFILE_FIELDS) {
+        if (fields[camel] !== undefined && fields[camel] !== null) {
+            out[camel] = String(fields[camel]).slice(0, 200);
+        }
+    }
+    return out;
+}
+
 // ===========================================================================
 // SQLite implementation
 // ===========================================================================
@@ -55,7 +73,28 @@ const sqliteStore = {
         return sql.get(`SELECT * FROM users WHERE lower(email) = lower(?)`, [email]);
     },
     async getUserById(id) {
-        return sql.get(`SELECT id, email, credits, role FROM users WHERE id = ?`, [id]);
+        const cols = PROFILE_FIELDS.map(([, snake]) => snake).join(', ');
+        const row = await sql.get(`SELECT id, email, credits, role, ${cols} FROM users WHERE id = ?`, [id]);
+        if (!row) return null;
+        const view = { id: row.id, email: row.email, credits: row.credits, role: row.role };
+        for (const [camel, snake] of PROFILE_FIELDS) view[camel] = row[snake] || '';
+        return view;
+    },
+    async getPasswordById(id) {
+        const row = await sql.get(`SELECT password FROM users WHERE id = ?`, [id]);
+        return row ? row.password : null;
+    },
+    async updateProfile(id, fields) {
+        const clean = cleanProfile(fields);
+        const keys = Object.keys(clean);
+        if (keys.length === 0) return;
+        const setClause = keys.map(k => {
+            const snake = PROFILE_FIELDS.find(([camel]) => camel === k)[1];
+            return `${snake} = ?`;
+        }).join(', ');
+        const params = keys.map(k => clean[k]);
+        params.push(id);
+        await sql.run(`UPDATE users SET ${setClause} WHERE id = ?`, params);
     },
     async getRoleById(id) {
         const row = await sql.get(`SELECT role FROM users WHERE id = ?`, [id]);
@@ -287,8 +326,19 @@ function firestoreStore() {
         async getUserById(id) {
             const doc = await users.doc(String(id)).get();
             if (!doc.exists) return null;
-            const v = userView(doc);
-            return { id: v.id, email: v.email, credits: v.credits, role: v.role };
+            const d = doc.data();
+            const view = { id: doc.id, email: d.email, credits: d.credits, role: d.role || 'user' };
+            for (const [camel] of PROFILE_FIELDS) view[camel] = d[camel] || '';
+            return view;
+        },
+        async getPasswordById(id) {
+            const doc = await users.doc(String(id)).get();
+            return doc.exists ? (doc.data().password ?? null) : null;
+        },
+        async updateProfile(id, fields) {
+            const clean = cleanProfile(fields);
+            if (Object.keys(clean).length === 0) return;
+            await users.doc(String(id)).update(clean);
         },
         async getRoleById(id) {
             const doc = await users.doc(String(id)).get();

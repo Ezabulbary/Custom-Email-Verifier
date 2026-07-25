@@ -48,16 +48,29 @@ const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.tr
 app.use(cors(allowedOrigins.length ? { origin: allowedOrigins } : {}));
 app.use(express.json({ limit: '1mb' }));
 
-// Never ship a hardcoded secret: require JWT_SECRET in production, and fall back
-// to a random per-process secret (which invalidates tokens on restart) rather
-// than a guessable default that would let anyone forge auth tokens.
+// Never ship a hardcoded secret: require JWT_SECRET in production. In
+// development, if none is set, persist a generated secret to a local file so
+// sessions survive server restarts (otherwise a random per-process secret would
+// invalidate every token on restart — which shows up as "refresh logs me out").
 const JWT_SECRET = process.env.JWT_SECRET || (() => {
     if (process.env.NODE_ENV === 'production') {
         console.error('FATAL: JWT_SECRET must be set in production.');
         process.exit(1);
     }
-    console.warn('[Security] JWT_SECRET not set — using a random ephemeral secret. Sessions reset on restart.');
-    return crypto.randomBytes(48).toString('hex');
+    const secretPath = require('path').join(__dirname, '.jwt_secret');
+    try {
+        if (fs.existsSync(secretPath)) {
+            const s = fs.readFileSync(secretPath, 'utf8').trim();
+            if (s) { console.warn('[Security] JWT_SECRET not set — using the persisted dev secret (.jwt_secret). Set JWT_SECRET in .env for production.'); return s; }
+        }
+        const s = crypto.randomBytes(48).toString('hex');
+        fs.writeFileSync(secretPath, s, { mode: 0o600 });
+        console.warn('[Security] JWT_SECRET not set — generated a persistent dev secret (.jwt_secret) so sessions survive restarts. Set JWT_SECRET in .env for production.');
+        return s;
+    } catch (e) {
+        console.warn('[Security] JWT_SECRET not set and .jwt_secret unavailable — using an ephemeral secret (sessions reset on restart).');
+        return crypto.randomBytes(48).toString('hex');
+    }
 })();
 
 // Load disposable domains at startup
@@ -296,6 +309,51 @@ app.get('/auth/me', authenticateToken, async (req, res) => {
         res.json(user);
     } catch (e) {
         res.status(500).json({ error: 'Database error' });
+    }
+});
+
+// Update the signed-in user's own profile (name / phone / address). Email,
+// role and credits are NOT editable here.
+const PROFILE_KEYS = ['firstName', 'lastName', 'phone', 'address', 'city', 'zip', 'country', 'state'];
+app.patch('/auth/profile', authenticateToken, async (req, res) => {
+    const body = req.body || {};
+    const fields = {};
+    for (const k of PROFILE_KEYS) {
+        if (body[k] !== undefined) {
+            if (typeof body[k] !== 'string') return res.status(400).json({ error: `Invalid ${k}` });
+            fields[k] = body[k];
+        }
+    }
+    try {
+        await store.updateProfile(req.user.id, fields);
+        const user = await store.getUserById(req.user.id);
+        res.json(user);
+    } catch (e) {
+        console.error('Update profile error:', e.message);
+        res.status(500).json({ error: 'Failed to update profile' });
+    }
+});
+
+// Change the signed-in user's own password. Requires the current password —
+// except for Google-only accounts (no password yet), which can set one.
+app.post('/auth/change-password', authenticateToken, async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    if (typeof newPassword !== 'string' || newPassword.length < 8 || newPassword.length > 200) {
+        return res.status(400).json({ error: 'New password must be between 8 and 200 characters' });
+    }
+    try {
+        const currentHash = await store.getPasswordById(req.user.id);
+        if (currentHash) {
+            if (typeof currentPassword !== 'string' || !(await bcrypt.compare(currentPassword, currentHash))) {
+                return res.status(400).json({ error: 'Current password is incorrect' });
+            }
+        }
+        const hash = await bcrypt.hash(newPassword, 10);
+        await store.setPassword(req.user.id, hash);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Change password error:', e.message);
+        res.status(500).json({ error: 'Failed to change password' });
     }
 });
 

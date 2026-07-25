@@ -9,3 +9,4 @@ frontend/.env
 frontend/.env.local
 serviceAccount.json
 .DS_Store
+.jwt_secret

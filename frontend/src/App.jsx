@@ -570,7 +570,54 @@ const FaqItem = ({ q, a }) => {
   );
 };
 
+// Display name from profile, falling back to email.
+const displayName = (u) => {
+  const n = `${u?.firstName || ''} ${u?.lastName || ''}`.trim();
+  return n || u?.email || 'Account';
+};
+
+// Reusable account dropdown (top-right corner). Shown when signed in — in the
+// public nav and in the dashboard header.
+const ProfileMenu = () => {
+  const { user, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+
+  if (!user) return null;
+  const initial = (displayName(user).charAt(0) || '?').toUpperCase();
+  const go = (path) => { setOpen(false); navigate(path); };
+
+  return (
+    <div className="profile-menu" ref={ref}>
+      <button className="profile-trigger" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+        <span className="profile-avatar-sm">{initial}</span>
+        <span className="profile-trigger-text">
+          <strong>{displayName(user)}</strong>
+          <small>Click to see options</small>
+        </span>
+        <ChevronDown size={16} className="profile-caret" />
+      </button>
+      {open && (
+        <div className="profile-dropdown">
+          <div className="profile-dropdown-head">Account:<span>{user.email}</span></div>
+          <button onClick={() => go('/dashboard')}><LayoutDashboard size={16}/> Dashboard</button>
+          <button onClick={() => go('/dashboard/account')}><User size={16}/> My Profile</button>
+          <button className="danger" onClick={() => { setOpen(false); logout(); navigate('/'); }}><LogOut size={16}/> Logout</button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const PublicNav = () => {
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const goToSection = useSectionNav();
@@ -625,8 +672,17 @@ const PublicNav = () => {
             <a href="#pricing" onClick={anchor('pricing')}>Pricing</a>
           </nav>
           <div className="nav-actions">
-            <Link to="/login" className="nav-login" onClick={close}>Login</Link>
-            <Link to="/register" className="nav-cta" onClick={close}>Get Started</Link>
+            {user ? (
+              <>
+                <Link to="/dashboard" className="nav-cta" onClick={close}>Dashboard</Link>
+                <ProfileMenu />
+              </>
+            ) : (
+              <>
+                <Link to="/login" className="nav-login" onClick={close}>Login</Link>
+                <Link to="/register" className="nav-cta" onClick={close}>Get Started</Link>
+              </>
+            )}
           </div>
         </div>
 
@@ -1091,8 +1147,8 @@ const DashboardLayout = ({ children }) => {
       </div>
       <div className="main-content">
         <div className="top-header">
-          <div style={{fontWeight:500}}>{user?.email}</div>
-          <div className="credits-badge">Credits: {user?.credits ?? 0}</div>
+          <div className="credits-badge">Credits: {(user?.credits ?? 0).toLocaleString()}</div>
+          <ProfileMenu />
         </div>
         <div className="page-content">
           {children}
@@ -1336,50 +1392,143 @@ const DashboardHome = () => {
   );
 };
 
-// --- My Account (self-only view, available to every signed-in user) ---
+// --- Profile Settings (self-only, available to every signed-in user) ---
 
 const ACCOUNT_ROLE_LABELS = { user: 'User', admin: 'Admin', superadmin: 'Super Admin' };
+const EMPTY_PROFILE = { firstName: '', lastName: '', phone: '', address: '', city: '', zip: '', country: '', state: '' };
 
 const MyAccount = () => {
-  const { user } = useAuth();
+  const { user, setUser } = useAuth();
+  const [form, setForm] = useState(EMPTY_PROFILE);
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState('');
+  const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
+  const [pwErr, setPwErr] = useState('');
+  const [pwMsg, setPwMsg] = useState('');
+  const [pwSaving, setPwSaving] = useState(false);
   const [stats, setStats] = useState(null);
+
+  // Populate the form from the loaded profile.
+  useEffect(() => {
+    if (!user) return;
+    setForm({
+      firstName: user.firstName || '', lastName: user.lastName || '', phone: user.phone || '',
+      address: user.address || '', city: user.city || '', zip: user.zip || '',
+      country: user.country || '', state: user.state || '',
+    });
+  }, [user]);
 
   useEffect(() => {
     apiFetch('/history/stats/overview').then(d => { if (d && !d.error) setStats(d); }).catch(() => {});
   }, []);
 
+  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+
+  const saveProfile = async (e) => {
+    e.preventDefault();
+    setSaving(true); setSavedMsg('');
+    try {
+      const data = await apiFetch('/auth/profile', { method: 'PATCH', body: JSON.stringify(form) });
+      if (data.error) throw new Error(data.error);
+      setUser(data);            // refresh nav name/avatar immediately
+      setSavedMsg('Saved!');
+      setTimeout(() => setSavedMsg(''), 2500);
+    } catch (err) { alert(friendlyError(err)); }
+    setSaving(false);
+  };
+
+  const changePassword = async (e) => {
+    e.preventDefault();
+    setPwErr(''); setPwMsg('');
+    if (pw.next.length < 8) { setPwErr('New password must be at least 8 characters.'); return; }
+    if (pw.next !== pw.confirm) { setPwErr('New passwords do not match.'); return; }
+    setPwSaving(true);
+    try {
+      const data = await apiFetch('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword: pw.current, newPassword: pw.next }) });
+      if (data.error) throw new Error(data.error);
+      setPwMsg('Password updated.'); setPw({ current: '', next: '', confirm: '' });
+      setTimeout(() => setPwMsg(''), 3000);
+    } catch (err) { setPwErr(friendlyError(err)); }
+    setPwSaving(false);
+  };
+
+  const initial = ((user?.firstName || user?.email || '?').charAt(0)).toUpperCase();
   const totalEmails = stats?.totalEmails ?? 0;
   const valid = stats?.counts?.valid ?? 0;
   const validRate = totalEmails > 0 ? Math.round((valid / totalEmails) * 100) : 0;
 
   return (
     <div>
-      <div className="page-title">My Account</div>
+      <div className="page-title">Profile Settings</div>
       <p style={{color:'var(--text-secondary)', marginTop:'-0.5rem', marginBottom:'1.25rem'}}>
-        Your account details and your own verification usage. Only you can see this.
+        Add or change information of your account. Only you can see this.
       </p>
 
-      <div className="card" style={{padding:'2rem', maxWidth:'640px'}}>
-        <div style={{display:'flex', alignItems:'center', gap:'1rem', marginBottom:'1.5rem'}}>
-          <div className="account-avatar">{(user?.email || '?').charAt(0).toUpperCase()}</div>
-          <div>
-            <div style={{fontWeight:700, fontSize:'1.1rem'}}>{user?.email}</div>
-            <span className={`badge role-${user?.role || 'user'}`}>{ACCOUNT_ROLE_LABELS[user?.role] || 'User'}</span>
+      <div className="profile-grid">
+        {/* My Information + My Address */}
+        <div className="card" style={{padding:'2rem'}}>
+          <h3 style={{fontSize:'1.15rem'}}>My Information</h3>
+          <p className="muted">Basic details for your account</p>
+          <form onSubmit={saveProfile}>
+            <div className="profile-id-row">
+              <div className="account-avatar lg">{initial}</div>
+              <div className="two-col" style={{flex:1}}>
+                <div className="field"><label>First Name</label><input className="input-field" value={form.firstName} onChange={set('firstName')} placeholder="First name" /></div>
+                <div className="field"><label>Last Name</label><input className="input-field" value={form.lastName} onChange={set('lastName')} placeholder="Last name" /></div>
+                <div className="field"><label>Email</label><input className="input-field" value={user?.email || ''} disabled title="Email can't be changed" /></div>
+                <div className="field"><label>Phone</label><input className="input-field" value={form.phone} onChange={set('phone')} placeholder="Phone number" /></div>
+              </div>
+            </div>
+
+            <h3 style={{fontSize:'1.15rem', marginTop:'1.5rem'}}>My Address</h3>
+            <p className="muted">Where we can reach you if needed</p>
+            <div className="field"><label>Address</label><input className="input-field" value={form.address} onChange={set('address')} placeholder="Street address" /></div>
+            <div className="three-col">
+              <div className="field"><label>City</label><input className="input-field" value={form.city} onChange={set('city')} /></div>
+              <div className="field"><label>ZIP</label><input className="input-field" value={form.zip} onChange={set('zip')} /></div>
+              <div className="field"><label>Country</label><input className="input-field" value={form.country} onChange={set('country')} /></div>
+            </div>
+            <div className="field"><label>State</label><input className="input-field" value={form.state} onChange={set('state')} /></div>
+
+            <div className="save-row">
+              {savedMsg && <span className="save-ok"><CheckCircle2 size={16}/> {savedMsg}</span>}
+              <button type="submit" className="btn-primary" disabled={saving}>
+                {saving ? <Loader2 className="loader" size={16}/> : null} Save All Information
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* Password + usage */}
+        <div className="profile-side">
+          <div className="card" style={{padding:'2rem'}}>
+            <h3 style={{fontSize:'1.15rem'}}>Update Account Password</h3>
+            {pwErr && <div className="auth-error" style={{marginTop:'0.75rem'}}><AlertCircle size={16}/> {pwErr}</div>}
+            {pwMsg && <div className="auth-success" style={{marginTop:'0.75rem'}}><CheckCircle2 size={18} color="#059669"/> <div>{pwMsg}</div></div>}
+            <form onSubmit={changePassword} className="form-group" style={{marginTop:'1rem'}}>
+              <label>Current Password</label>
+              <input type="password" className="input-field" value={pw.current} onChange={e=>setPw(p=>({...p, current:e.target.value}))} placeholder="Current password" />
+              <label>New Password</label>
+              <input type="password" className="input-field" value={pw.next} onChange={e=>setPw(p=>({...p, next:e.target.value}))} placeholder="At least 8 characters" />
+              <label>Confirm New Password</label>
+              <input type="password" className="input-field" value={pw.confirm} onChange={e=>setPw(p=>({...p, confirm:e.target.value}))} placeholder="Confirm new password" />
+              <button type="submit" className="btn-primary" style={{marginTop:'1rem'}} disabled={pwSaving}>
+                {pwSaving ? <Loader2 className="loader" size={16}/> : null} Update Password
+              </button>
+            </form>
+            <p className="muted" style={{marginTop:'0.75rem', fontSize:'0.8rem'}}>Signed up with Google? You can set a password here without a current one.</p>
+          </div>
+
+          <div className="card" style={{padding:'2rem', marginTop:'1.5rem'}}>
+            <h3 style={{fontSize:'1.15rem'}}>Account &amp; usage</h3>
+            <div className="account-rows" style={{marginTop:'0.75rem'}}>
+              <div className="account-row"><span>Role</span><strong>{ACCOUNT_ROLE_LABELS[user?.role] || 'User'}</strong></div>
+              <div className="account-row"><span>Available credits</span><strong>{(user?.credits ?? 0).toLocaleString()}</strong></div>
+              <div className="account-row"><span>Emails verified (30d)</span><strong>{totalEmails.toLocaleString()}</strong></div>
+              <div className="account-row"><span>Valid rate (30d)</span><strong>{validRate}%</strong></div>
+            </div>
           </div>
         </div>
-        <div className="account-rows">
-          <div className="account-row"><span>Email</span><strong>{user?.email}</strong></div>
-          <div className="account-row"><span>Role</span><strong>{ACCOUNT_ROLE_LABELS[user?.role] || 'User'}</strong></div>
-          <div className="account-row"><span>Available credits</span><strong>{(user?.credits ?? 0).toLocaleString()}</strong></div>
-        </div>
-      </div>
-
-      <h3 style={{fontSize:'1.05rem', margin:'2rem 0 1rem'}}>Your usage — last {stats?.retentionDays ?? 30} days</h3>
-      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:'1.25rem'}}>
-        <StatCard label="Emails Verified" value={totalEmails.toLocaleString()} />
-        <StatCard label="Executions" value={(stats?.executions ?? 0).toLocaleString()} />
-        <StatCard label="Lists Cleaned" value={stats?.listsCleaned ?? 0} />
-        <StatCard label="Valid Rate" value={`${validRate}%`} accent="#059669" />
       </div>
     </div>
   );

@@ -26,6 +26,11 @@ db.serialize(() => {
     db.run(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`, () => {});
     db.run(`ALTER TABLE users ADD COLUMN created_at TEXT`, () => {});
 
+    // Optional profile fields (Reoon-style Profile Settings).
+    for (const col of ['first_name', 'last_name', 'phone', 'address', 'city', 'zip', 'country', 'state']) {
+        db.run(`ALTER TABLE users ADD COLUMN ${col} TEXT`, () => {});
+    }
+
     // Per-execution verification history (retained for ~1 month). Each row is a
     // "batch": one execution, tagged with a per-user sequential batch_number and
     // an optional task name (Reoon-style Tasks & Results).
