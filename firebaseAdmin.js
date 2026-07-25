@@ -25,6 +25,15 @@ try {
         credential = cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT));
     } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
         credential = applicationDefault();
+    } else {
+        // Convenience: auto-detect a serviceAccount.json in the project root, so
+        // you only need to drop the file in — no env var required.
+        const fs = require('fs');
+        const localSa = require('path').join(__dirname, 'serviceAccount.json');
+        if (fs.existsSync(localSa)) {
+            credential = cert(JSON.parse(fs.readFileSync(localSa, 'utf8')));
+            console.log('[Auth] Using ./serviceAccount.json');
+        }
     }
 
     if (credential) {
