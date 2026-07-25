@@ -38,4 +38,32 @@ const verifyIdToken = async (idToken) => {
     return admin.auth().verifyIdToken(idToken);
 };
 
-module.exports = { isGoogleEnabled, verifyIdToken };
+// --- Cloud Firestore (optional data store) ---
+//
+// Firestore reuses the same initialised Firebase Admin app. It is used as the
+// primary data store ONLY when USE_FIRESTORE=1 AND a service account is
+// configured; otherwise the app falls back to local SQLite (see store.js).
+// This keeps the app working out-of-the-box while letting you flip a single
+// env var to move users + verification batches into Cloud Firestore.
+let firestore = null;
+const wantFirestore = process.env.USE_FIRESTORE === '1';
+
+if (wantFirestore) {
+    if (enabled) {
+        try {
+            firestore = admin.firestore();
+            firestore.settings({ ignoreUndefinedProperties: true });
+            console.log('[Store] Cloud Firestore enabled — users & batches will be stored in Firestore.');
+        } catch (e) {
+            firestore = null;
+            console.warn('[Store] USE_FIRESTORE=1 but Firestore could not be initialised — falling back to SQLite:', e.message);
+        }
+    } else {
+        console.warn('[Store] USE_FIRESTORE=1 but no Firebase service account is set — falling back to SQLite.');
+    }
+}
+
+const isFirestoreEnabled = () => firestore !== null;
+const getFirestore = () => firestore;
+
+module.exports = { isGoogleEnabled, verifyIdToken, isFirestoreEnabled, getFirestore };

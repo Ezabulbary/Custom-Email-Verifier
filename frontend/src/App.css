@@ -815,3 +815,29 @@
   .animate-fade-in { animation: none; }
   html { scroll-behavior: auto; }
 }
+
+/* --- Overview donut (Usage Statistics) --- */
+.donut-wrap { display: flex; align-items: center; gap: 2.5rem; flex-wrap: wrap; padding: 0.5rem 0; }
+.donut-svg { flex-shrink: 0; }
+.donut-center-label { fill: var(--text-secondary); font-size: 13px; }
+.donut-center-total { fill: var(--text-primary); font-size: 26px; font-weight: 800; }
+.donut-legend { display: flex; flex-direction: column; gap: 0.6rem; min-width: 180px; }
+.donut-legend-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.95rem; }
+.donut-legend-row strong { margin-left: auto; }
+.donut-dot { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.donut-legend-label { color: var(--text-secondary); }
+
+/* --- Tasks & Results --- */
+.tabs { display: inline-flex; background: var(--bg-color, #f1f5f9); border: 1px solid var(--border-color); border-radius: 10px; padding: 3px; gap: 2px; }
+.tab { border: none; background: transparent; padding: 0.4rem 0.9rem; border-radius: 8px; font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); cursor: pointer; transition: background 0.15s ease, color 0.15s ease; }
+.tab:hover { color: var(--text-primary); }
+.tab.active { background: var(--accent-color); color: #fff; }
+.tasks-table th, .tasks-table td { vertical-align: middle; }
+.tasks-pager { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.25rem; border-top: 1px solid var(--border-color); color: var(--text-secondary); font-size: 0.9rem; flex-wrap: wrap; gap: 0.75rem; }
+.pager-btns { display: flex; align-items: center; gap: 0.5rem; }
+.pager-current { font-weight: 600; color: var(--text-primary); }
+
+/* Batch type badges */
+.badge.type-single { background: #e0e7ff; color: #4338ca; }
+.badge.type-bulk { background: #dbeafe; color: #1d4ed8; }
+.badge.type-csv { background: #d1fae5; color: #047857; }

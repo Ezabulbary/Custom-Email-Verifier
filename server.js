@@ -11,9 +11,11 @@ const { fetchDomains } = require('./disposable');
 const { verifyEmail } = require('./verifier');
 const { isGoogleEnabled, verifyIdToken } = require('./firebaseAdmin');
 const { isEmailEnabled, sendResetEmail } = require('./mailer');
-const db = require('./db');
+const store = require('./store');
 
 const app = express();
+
+console.log(`[Store] Active data store: ${store.backend.toUpperCase()}`);
 
 // Limit uploads: max 2 MB and only accept CSV files, to avoid disk/CPU DoS
 // from arbitrarily large or non-CSV uploads.
@@ -52,7 +54,7 @@ fetchDomains().then(() => {
 });
 
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok' });
+    res.json({ status: 'ok', store: store.backend });
 });
 
 // --- Auth Endpoints ---
@@ -61,7 +63,6 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Roles, highest to lowest. superadmin > admin > user.
 const ROLES = ['user', 'admin', 'superadmin'];
-const rank = (role) => Math.max(0, ROLES.indexOf(role || 'user'));
 
 // Configured privileged emails. SUPERADMIN_EMAIL becomes superadmin, ADMIN_EMAIL
 // becomes admin — on startup (even for already-registered accounts) and at signup.
@@ -76,19 +77,24 @@ function bootstrapRole(email, isFirstUser) {
     return 'user';
 }
 
-if (SUPERADMIN_EMAIL) {
-    db.run(`UPDATE users SET role = 'superadmin' WHERE lower(email) = ?`, [SUPERADMIN_EMAIL], function (err) {
-        if (!err && this.changes > 0) console.log(`[Admin] ${SUPERADMIN_EMAIL} promoted to superadmin.`);
-    });
-}
-if (ADMIN_EMAIL) {
-    // Don't demote a superadmin if the same email was set for both.
-    db.run(`UPDATE users SET role = 'admin' WHERE lower(email) = ? AND role != 'superadmin'`, [ADMIN_EMAIL], function (err) {
-        if (!err && this.changes > 0) console.log(`[Admin] ${ADMIN_EMAIL} promoted to admin.`);
-    });
-}
+// Promote configured privileged emails on startup (best-effort).
+(async () => {
+    try {
+        if (SUPERADMIN_EMAIL) {
+            const n = await store.promoteByEmail(SUPERADMIN_EMAIL, 'superadmin');
+            if (n > 0) console.log(`[Admin] ${SUPERADMIN_EMAIL} promoted to superadmin.`);
+        }
+        if (ADMIN_EMAIL) {
+            // Don't demote a superadmin if the same email was set for both.
+            const n = await store.promoteByEmail(ADMIN_EMAIL, 'admin', { skipIfSuperadmin: true });
+            if (n > 0) console.log(`[Admin] ${ADMIN_EMAIL} promoted to admin.`);
+        }
+    } catch (e) {
+        console.error('[Admin] Startup promotion failed:', e.message);
+    }
+})();
 
-app.post('/auth/register', (req, res) => {
+app.post('/auth/register', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
     if (typeof email !== 'string' || typeof password !== 'string') {
@@ -99,43 +105,38 @@ app.post('/auth/register', (req, res) => {
         return res.status(400).json({ error: 'Password must be between 8 and 200 characters' });
     }
 
-    bcrypt.hash(password, 10, (err, hash) => {
-        if (err) return res.status(500).json({ error: 'Server error' });
-
+    try {
+        const hash = await bcrypt.hash(password, 10);
         // First-ever user → superadmin; configured emails get their roles.
-        db.get(`SELECT COUNT(*) AS n FROM users`, [], (cErr, row) => {
-            const isFirst = !cErr && row && row.n === 0;
-            const role = bootstrapRole(email, isFirst);
-
-            db.run(`INSERT INTO users (email, password, credits, role) VALUES (?, ?, 100, ?)`, [email, hash, role], function(err) {
-                if (err) {
-                    if (err.message.includes('UNIQUE constraint failed')) {
-                        return res.status(400).json({ error: 'Email already exists' });
-                    }
-                    return res.status(500).json({ error: 'Database error' });
-                }
-                res.json({ success: true, message: 'User registered successfully', userId: this.lastID, role });
-            });
-        });
-    });
+        const isFirst = (await store.countUsers()) === 0;
+        const role = bootstrapRole(email, isFirst);
+        const user = await store.createUser({ email, password: hash, credits: 100, role });
+        res.json({ success: true, message: 'User registered successfully', userId: user.id, role });
+    } catch (err) {
+        if (err.code === 'EMAIL_EXISTS') return res.status(400).json({ error: 'Email already exists' });
+        console.error('Register error:', err.message);
+        res.status(500).json({ error: 'Database error' });
+    }
 });
 
-app.post('/auth/login', (req, res) => {
+app.post('/auth/login', async (req, res) => {
     const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Invalid email or password' });
 
-    db.get(`SELECT * FROM users WHERE email = ?`, [email], (err, user) => {
-        if (err) return res.status(500).json({ error: 'Database error' });
+    try {
+        const user = await store.findUserByEmail(email);
         if (!user) return res.status(400).json({ error: 'Invalid email or password' });
         if (!user.password) return res.status(400).json({ error: 'This account uses Google sign-in. Continue with Google.' });
 
-        bcrypt.compare(password, user.password, (err, isMatch) => {
-            if (err) return res.status(500).json({ error: 'Server error' });
-            if (!isMatch) return res.status(400).json({ error: 'Invalid email or password' });
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return res.status(400).json({ error: 'Invalid email or password' });
 
-            const token = jwt.sign({ id: user.id, email: user.email, role: user.role || 'user' }, JWT_SECRET, { expiresIn: '24h' });
-            res.json({ token, user: { id: user.id, email: user.email, credits: user.credits, role: user.role || 'user' } });
-        });
-    });
+        const token = jwt.sign({ id: user.id, email: user.email, role: user.role || 'user' }, JWT_SECRET, { expiresIn: '24h' });
+        res.json({ token, user: { id: user.id, email: user.email, credits: user.credits, role: user.role || 'user' } });
+    } catch (err) {
+        console.error('Login error:', err.message);
+        res.status(500).json({ error: 'Database error' });
+    }
 });
 
 // Google sign-in / sign-up. The frontend obtains a Firebase ID token via the
@@ -166,25 +167,27 @@ app.post('/auth/google', async (req, res) => {
         res.json({ token, user: { id: u.id, email: u.email, credits: u.credits, role: u.role || 'user' } });
     };
 
-    db.get(`SELECT * FROM users WHERE lower(email) = ?`, [email], (err, user) => {
-        if (err) return res.status(500).json({ error: 'Database error' });
-        if (user) return issue(user);
+    try {
+        const existing = await store.findUserByEmail(email);
+        if (existing) return issue(existing);
 
         // First-ever user → superadmin; configured emails get their roles.
-        db.get(`SELECT COUNT(*) AS n FROM users`, [], (cErr, row) => {
-            const isFirst = !cErr && row && row.n === 0;
-            const role = bootstrapRole(email, isFirst);
-            db.run(`INSERT INTO users (email, password, credits, role) VALUES (?, NULL, 100, ?)`, [email, role], function (insErr) {
-                if (insErr) {
-                    if (insErr.message.includes('UNIQUE constraint failed')) {
-                        return db.get(`SELECT * FROM users WHERE lower(email) = ?`, [email], (e2, u2) => u2 ? issue(u2) : res.status(500).json({ error: 'Database error' }));
-                    }
-                    return res.status(500).json({ error: 'Database error' });
-                }
-                issue({ id: this.lastID, email, credits: 100, role });
-            });
-        });
-    });
+        const isFirst = (await store.countUsers()) === 0;
+        const role = bootstrapRole(email, isFirst);
+        try {
+            const user = await store.createUser({ email, password: null, credits: 100, role });
+            issue(user);
+        } catch (insErr) {
+            if (insErr.code === 'EMAIL_EXISTS') {
+                const u2 = await store.findUserByEmail(email);
+                return u2 ? issue(u2) : res.status(500).json({ error: 'Database error' });
+            }
+            throw insErr;
+        }
+    } catch (err) {
+        console.error('Google auth error:', err.message);
+        res.status(500).json({ error: 'Database error' });
+    }
 });
 
 // Front-end origin used to build the reset link in the email.
@@ -213,60 +216,58 @@ async function deliverResetEmail(email, link) {
 }
 
 // Request a password reset. Always responds success (no account enumeration).
-app.post('/auth/forgot-password', (req, res) => {
+app.post('/auth/forgot-password', async (req, res) => {
     const email = (req.body && req.body.email || '').trim().toLowerCase();
     const ok = () => res.json({ success: true });
     if (!email || !EMAIL_RE.test(email)) return ok();
 
-    db.get(`SELECT * FROM users WHERE lower(email) = ?`, [email], (err, user) => {
+    try {
+        const user = await store.findUserByEmail(email);
         // Only send for real accounts that use a password (not Google-only).
-        if (err || !user || !user.password) return ok();
+        if (!user || !user.password) return ok();
 
         const token = crypto.randomBytes(32).toString('hex');
         const tokenHash = sha256(token);
         const expiresAt = Date.now() + RESET_TTL_MS;
 
-        db.run(`INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, ?)`,
-            [user.id, tokenHash, expiresAt], (insErr) => {
-                if (!insErr) {
-                    deliverResetEmail(user.email, `${FRONTEND_URL}/reset-password?token=${token}`);
-                }
-                return ok(); // respond success either way
-            });
-    });
+        await store.createReset(user.id, tokenHash, expiresAt);
+        deliverResetEmail(user.email, `${FRONTEND_URL}/reset-password?token=${token}`);
+    } catch (e) {
+        console.error('Forgot-password error:', e.message);
+    }
+    return ok(); // respond success either way
 });
 
 // Complete a password reset using the emailed token.
-app.post('/auth/reset-password', (req, res) => {
+app.post('/auth/reset-password', async (req, res) => {
     const { token, password } = req.body || {};
     if (!token || typeof token !== 'string') return res.status(400).json({ error: 'Invalid reset link' });
     if (typeof password !== 'string' || password.length < 8 || password.length > 200) {
         return res.status(400).json({ error: 'Password must be between 8 and 200 characters' });
     }
 
-    const tokenHash = sha256(token);
-    db.get(`SELECT * FROM password_resets WHERE token_hash = ? AND used = 0`, [tokenHash], (err, row) => {
-        if (err) return res.status(500).json({ error: 'Database error' });
+    try {
+        const tokenHash = sha256(token);
+        const row = await store.getActiveReset(tokenHash);
         if (!row || row.expires_at < Date.now()) {
             return res.status(400).json({ error: 'This reset link is invalid or has expired. Request a new one.' });
         }
 
-        bcrypt.hash(password, 10, (hErr, hash) => {
-            if (hErr) return res.status(500).json({ error: 'Server error' });
-            db.run(`UPDATE users SET password = ? WHERE id = ?`, [hash, row.user_id], (uErr) => {
-                if (uErr) return res.status(500).json({ error: 'Database error' });
-                // Consume this token and invalidate any other outstanding ones.
-                db.run(`UPDATE password_resets SET used = 1 WHERE user_id = ?`, [row.user_id]);
-                res.json({ success: true });
-            });
-        });
-    });
+        const hash = await bcrypt.hash(password, 10);
+        await store.setPassword(row.user_id, hash);
+        // Consume this token and invalidate any other outstanding ones.
+        await store.consumeUserResets(row.user_id);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Reset-password error:', e.message);
+        res.status(500).json({ error: 'Database error' });
+    }
 });
 
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
-    
+
     if (token == null) return res.status(401).json({ error: 'Unauthorized' });
 
     jwt.verify(token, JWT_SECRET, (err, user) => {
@@ -276,91 +277,49 @@ function authenticateToken(req, res, next) {
     });
 }
 
-app.get('/auth/me', authenticateToken, (req, res) => {
-    db.get(`SELECT id, email, credits, role FROM users WHERE id = ?`, [req.user.id], (err, user) => {
-        if (err || !user) return res.status(404).json({ error: 'User not found' });
+app.get('/auth/me', authenticateToken, async (req, res) => {
+    try {
+        const user = await store.getUserById(req.user.id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
         res.json(user);
-    });
+    } catch (e) {
+        res.status(500).json({ error: 'Database error' });
+    }
 });
 
 // Admin guard — allows admin AND superadmin. Exposes the live role on req so
 // handlers can apply superadmin-only rules.
-function requireAdmin(req, res, next) {
-    db.get(`SELECT role FROM users WHERE id = ?`, [req.user.id], (err, row) => {
-        if (err) return res.status(500).json({ error: 'Database error' });
-        if (!row || (row.role !== 'admin' && row.role !== 'superadmin')) {
+async function requireAdmin(req, res, next) {
+    try {
+        const role = await store.getRoleById(req.user.id);
+        if (role !== 'admin' && role !== 'superadmin') {
             return res.status(403).json({ error: 'Admin access required' });
         }
-        req.viewerRole = row.role;
+        req.viewerRole = role;
         next();
-    });
-}
-
-// Fetch a target user's role (null if not found).
-function getRole(id) {
-    return new Promise((resolve) => {
-        db.get(`SELECT role FROM users WHERE id = ?`, [id], (err, row) => resolve(err || !row ? null : row.role));
-    });
-}
-
-function getUser(userId) {
-    return new Promise((resolve, reject) => {
-        db.get(`SELECT id, email, credits FROM users WHERE id = ?`, [userId], (err, user) => {
-            if (err) reject(err);
-            else resolve(user);
-        });
-    });
-}
-
-function deductCredits(userId, amount) {
-    return new Promise((resolve, reject) => {
-        // Guard against credits going negative.
-        db.run(`UPDATE users SET credits = MAX(credits - ?, 0) WHERE id = ?`, [amount, userId], function(err) {
-            if (err) reject(err);
-            else resolve();
-        });
-    });
-}
-
-// --- Verification history (retained ~1 month) ---
-
-const HISTORY_RETENTION_DAYS = 30;
-const HISTORY_MAX_STORED_RESULTS = 5000; // cap stored payload per execution
-
-function summarizeResults(results) {
-    const summary = { total: results.length, valid: 0, invalid: 0, catchAll: 0, unknown: 0 };
-    for (const r of results) {
-        if (r.status === 'valid') summary.valid++;
-        else if (r.status === 'invalid') summary.invalid++;
-        else if (r.status === 'catch-all') summary.catchAll++;
-        else summary.unknown++;
+    } catch (e) {
+        res.status(500).json({ error: 'Database error' });
     }
-    return summary;
 }
 
-function saveHistory(userId, type, results) {
-    return new Promise((resolve) => {
-        const s = summarizeResults(results);
-        const stored = results.slice(0, HISTORY_MAX_STORED_RESULTS);
-        db.run(
-            `INSERT INTO history
-                (user_id, type, total, valid_count, invalid_count, catch_all_count, unknown_count, results)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [userId, type, s.total, s.valid, s.invalid, s.catchAll, s.unknown, JSON.stringify(stored)],
-            (err) => {
-                if (err) console.error('Failed to save history:', err.message);
-                resolve(); // history is best-effort; never fail the request over it
-            }
-        );
-    });
+// --- Verification history (retained ~1 month, via the store) ---
+
+const HISTORY_RETENTION_DAYS = store.HISTORY_RETENTION_DAYS;
+
+// Save an execution as a numbered batch. History is best-effort — a failure
+// here never fails the verification request itself.
+async function saveBatch(userId, type, results, name) {
+    try {
+        return await store.createBatch(userId, { type, name, results });
+    } catch (err) {
+        console.error('Failed to save batch:', err.message);
+        return null;
+    }
 }
 
-function cleanupHistory() {
-    db.run(
-        `DELETE FROM history WHERE created_at < datetime('now', ?)`,
-        [`-${HISTORY_RETENTION_DAYS} days`],
-        (err) => { if (err) console.error('History cleanup error:', err.message); }
-    );
+async function cleanupHistory() {
+    try { await store.cleanupOldBatches(); }
+    catch (err) { console.error('History cleanup error:', err.message); }
 }
 // Purge expired history at startup and periodically thereafter.
 cleanupHistory();
@@ -373,16 +332,17 @@ app.post('/verify', authenticateToken, async (req, res) => {
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
     try {
-        const user = await getUser(req.user.id);
+        const user = await store.getUserById(req.user.id);
         if (!user) return res.status(404).json({ error: 'User not found' });
         if (user.credits < 1) return res.status(402).json({ error: 'Insufficient credits' });
 
         const result = await verifyEmail(email);
-        await deductCredits(req.user.id, 1);
-        await saveHistory(req.user.id, 'single', [result]);
+        await store.deductCredits(req.user.id, 1);
+        const batch = await saveBatch(req.user.id, 'single', [result], (req.body.name || '').toString().slice(0, 120) || null);
 
-        res.json(result);
+        res.json({ ...result, batchId: batch && batch.id, batchNumber: batch && batch.batchNumber });
     } catch (err) {
+        console.error('Verify error:', err.message);
         res.status(500).json({ error: 'Verification failed' });
     }
 });
@@ -406,12 +366,13 @@ async function asyncPool(poolLimit, array, iteratorFn) {
 
 app.post('/verify/bulk', authenticateToken, async (req, res) => {
     const { emails } = req.body;
+    const name = (req.body.name || '').toString().slice(0, 120) || null;
     if (!emails || !Array.isArray(emails) || emails.length === 0) {
         return res.status(400).json({ error: 'Array of emails is required' });
     }
 
     try {
-        const user = await getUser(req.user.id);
+        const user = await store.getUserById(req.user.id);
         if (!user) return res.status(404).json({ error: 'User not found' });
         if (user.credits < emails.length) {
             return res.status(402).json({ error: `Insufficient credits: need ${emails.length}, have ${user.credits}` });
@@ -421,16 +382,18 @@ app.post('/verify/bulk', authenticateToken, async (req, res) => {
             return await verifyEmail(email);
         });
 
-        await deductCredits(req.user.id, results.length);
-        await saveHistory(req.user.id, 'bulk', results);
-        res.json({ total: results.length, results });
+        await store.deductCredits(req.user.id, results.length);
+        const batch = await saveBatch(req.user.id, 'bulk', results, name);
+        res.json({ total: results.length, results, batchId: batch && batch.id, batchNumber: batch && batch.batchNumber });
     } catch (err) {
+        console.error('Bulk verify error:', err.message);
         res.status(500).json({ error: 'Bulk verification failed' });
     }
 });
 
 app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
+    const name = (req.body.name || '').toString().slice(0, 120) || null;
 
     const emails = [];
     fs.createReadStream(req.file.path)
@@ -449,7 +412,7 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => 
             }
 
             try {
-                const user = await getUser(req.user.id);
+                const user = await store.getUserById(req.user.id);
                 if (!user) return res.status(404).json({ error: 'User not found' });
                 if (user.credits < emails.length) {
                     return res.status(402).json({ error: `Insufficient credits: need ${emails.length}, have ${user.credits}` });
@@ -459,10 +422,11 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => 
                     return await verifyEmail(email);
                 });
 
-                await deductCredits(req.user.id, results.length);
-                await saveHistory(req.user.id, 'csv', results);
-                res.json({ total: results.length, results });
+                await store.deductCredits(req.user.id, results.length);
+                const batch = await saveBatch(req.user.id, 'csv', results, name);
+                res.json({ total: results.length, results, batchId: batch && batch.id, batchNumber: batch && batch.batchNumber });
             } catch (err) {
+                console.error('CSV verify error:', err.message);
                 res.status(500).json({ error: 'CSV verification failed' });
             }
         })
@@ -472,184 +436,155 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => 
         });
 });
 
-// --- History Endpoints (Protected) ---
+// --- History / Tasks Endpoints (Protected) ---
 
-// List past executions for the logged-in user within the retention window.
-// Optional query: ?type=single|bulk|csv  &  ?limit=N (default 50, max 200)
-app.get('/history', authenticateToken, (req, res) => {
+// List past execution batches for the logged-in user within the retention
+// window. Summaries only (no per-address results) — fetch a single batch's
+// results via GET /history/:id.
+// Optional query: ?type=single|bulk|csv  &  ?limit=N (default 50, max 500)
+app.get('/history', authenticateToken, async (req, res) => {
     const { type } = req.query;
     let limit = parseInt(req.query.limit, 10);
     if (Number.isNaN(limit) || limit < 1) limit = 50;
-    if (limit > 200) limit = 200;
+    if (limit > 500) limit = 500;
+    const typeFilter = ['single', 'bulk', 'csv'].includes(type) ? type : undefined;
 
-    const params = [req.user.id, `-${HISTORY_RETENTION_DAYS} days`];
-    let sql = `SELECT id, type, total, valid_count, invalid_count, catch_all_count,
-                      unknown_count, results, created_at
-               FROM history
-               WHERE user_id = ? AND created_at >= datetime('now', ?)`;
-    if (type && ['single', 'bulk', 'csv'].includes(type)) {
-        sql += ` AND type = ?`;
-        params.push(type);
+    try {
+        const batches = await store.listBatches(req.user.id, { type: typeFilter, limit });
+        res.json({ retentionDays: HISTORY_RETENTION_DAYS, history: batches });
+    } catch (e) {
+        console.error('History error:', e.message);
+        res.status(500).json({ error: 'Failed to load history' });
     }
-    sql += ` ORDER BY datetime(created_at) DESC LIMIT ?`;
-    params.push(limit);
+});
 
-    db.all(sql, params, (err, rows) => {
-        if (err) return res.status(500).json({ error: 'Failed to load history' });
-        const history = rows.map(r => ({
-            id: r.id,
-            type: r.type,
-            total: r.total,
-            counts: {
-                valid: r.valid_count,
-                invalid: r.invalid_count,
-                catchAll: r.catch_all_count,
-                unknown: r.unknown_count
-            },
-            results: safeParse(r.results),
-            createdAt: r.created_at
-        }));
-        res.json({ retentionDays: HISTORY_RETENTION_DAYS, history });
-    });
+// Full results for one batch (Details / Download).
+app.get('/history/:id', authenticateToken, async (req, res) => {
+    try {
+        const batch = await store.getBatch(req.user.id, req.params.id);
+        if (!batch) return res.status(404).json({ error: 'Batch not found' });
+        res.json(batch);
+    } catch (e) {
+        console.error('Batch fetch error:', e.message);
+        res.status(500).json({ error: 'Failed to load batch' });
+    }
 });
 
 // Aggregate stats for the dashboard (within the retention window).
-app.get('/history/stats', authenticateToken, (req, res) => {
-    const params = [req.user.id, `-${HISTORY_RETENTION_DAYS} days`];
-    const sql = `SELECT
-            COUNT(*) AS executions,
-            COALESCE(SUM(total), 0) AS total_emails,
-            COALESCE(SUM(valid_count), 0) AS valid,
-            COALESCE(SUM(invalid_count), 0) AS invalid,
-            COALESCE(SUM(catch_all_count), 0) AS catch_all,
-            COALESCE(SUM(unknown_count), 0) AS unknown,
-            COALESCE(SUM(CASE WHEN type = 'csv' THEN 1 ELSE 0 END), 0) AS lists_cleaned
-        FROM history
-        WHERE user_id = ? AND created_at >= datetime('now', ?)`;
-    db.get(sql, params, (err, row) => {
-        if (err) return res.status(500).json({ error: 'Failed to load stats' });
-        res.json({
-            retentionDays: HISTORY_RETENTION_DAYS,
-            executions: row.executions,
-            totalEmails: row.total_emails,
-            listsCleaned: row.lists_cleaned,
-            counts: {
-                valid: row.valid,
-                invalid: row.invalid,
-                catchAll: row.catch_all,
-                unknown: row.unknown
-            }
-        });
-    });
+app.get('/history/stats/overview', authenticateToken, async (req, res) => {
+    try {
+        const s = await store.userStats(req.user.id);
+        res.json({ retentionDays: HISTORY_RETENTION_DAYS, ...s });
+    } catch (e) {
+        console.error('Stats error:', e.message);
+        res.status(500).json({ error: 'Failed to load stats' });
+    }
 });
-
-function safeParse(json) {
-    try { return JSON.parse(json) || []; } catch (e) { return []; }
-}
 
 // --- Admin Endpoints (Protected, admin only) ---
 
 // List users with their verification counts. Superadmins are visible ONLY to
 // superadmins; a plain admin never sees superadmin accounts.
-app.get('/admin/users', authenticateToken, requireAdmin, (req, res) => {
-    const hideSuper = req.viewerRole !== 'superadmin';
-    const sql = `SELECT u.id, u.email, u.credits, u.role, u.created_at,
-                        COALESCE(SUM(h.total), 0) AS emails_verified,
-                        COUNT(h.id) AS executions
-                 FROM users u
-                 LEFT JOIN history h ON h.user_id = u.id
-                 ${hideSuper ? `WHERE u.role != 'superadmin'` : ''}
-                 GROUP BY u.id
-                 ORDER BY u.id ASC`;
-    db.all(sql, [], (err, rows) => {
-        if (err) return res.status(500).json({ error: 'Failed to load users' });
-        res.json({ users: rows, viewerRole: req.viewerRole });
-    });
+app.get('/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const users = await store.listUsers({ hideSuper: req.viewerRole !== 'superadmin' });
+        res.json({ users, viewerRole: req.viewerRole });
+    } catch (e) {
+        console.error('Admin users error:', e.message);
+        res.status(500).json({ error: 'Failed to load users' });
+    }
 });
 
 // Platform-wide stats. For a plain admin, superadmins are excluded from the
 // user/credit counts so hidden accounts don't leak through the numbers.
-app.get('/admin/stats', authenticateToken, requireAdmin, (req, res) => {
-    const superFilter = req.viewerRole === 'superadmin' ? '' : `WHERE role != 'superadmin'`;
-    db.get(`SELECT
-                (SELECT COUNT(*) FROM users ${superFilter}) AS total_users,
-                (SELECT COUNT(*) FROM users WHERE role = 'admin') AS admins,
-                (SELECT COUNT(*) FROM users WHERE role = 'superadmin') AS superadmins,
-                (SELECT COALESCE(SUM(credits),0) FROM users ${superFilter}) AS total_credits,
-                (SELECT COUNT(*) FROM history) AS total_executions,
-                (SELECT COALESCE(SUM(total),0) FROM history) AS total_emails,
-                (SELECT COALESCE(SUM(valid_count),0) FROM history) AS total_valid`,
-        [], (err, row) => {
-            if (err) return res.status(500).json({ error: 'Failed to load stats' });
-            if (req.viewerRole !== 'superadmin') row.superadmins = undefined;
-            res.json(row);
-        });
+app.get('/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const row = await store.adminStats({ viewerRole: req.viewerRole });
+        if (req.viewerRole !== 'superadmin') row.superadmins = undefined;
+        res.json(row);
+    } catch (e) {
+        console.error('Admin stats error:', e.message);
+        res.status(500).json({ error: 'Failed to load stats' });
+    }
 });
 
 // A plain admin may never see or act on a superadmin — treat as not found.
 const targetHiddenFromViewer = (targetRole, viewerRole) =>
     targetRole === 'superadmin' && viewerRole !== 'superadmin';
 
+// Validate a user id from the URL. Ids are opaque (numeric for SQLite, email
+// for Firestore) so we only require a non-empty value, never parseInt.
+const readId = (raw) => {
+    const id = (raw == null ? '' : String(raw)).trim();
+    return id || null;
+};
+
 // Adjust a user's credits by a (positive or negative) delta.
 app.post('/admin/users/:id/credits', authenticateToken, requireAdmin, async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = readId(req.params.id);
     const delta = parseInt(req.body.delta, 10);
-    if (Number.isNaN(id) || Number.isNaN(delta)) return res.status(400).json({ error: 'Invalid input' });
+    if (!id || Number.isNaN(delta)) return res.status(400).json({ error: 'Invalid input' });
 
-    const targetRole = await getRole(id);
-    if (targetRole === null || targetHiddenFromViewer(targetRole, req.viewerRole)) {
-        return res.status(404).json({ error: 'User not found' });
+    try {
+        const targetRole = await store.getRoleById(id);
+        if (targetRole === null || targetHiddenFromViewer(targetRole, req.viewerRole)) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        const credits = await store.adjustCredits(id, delta);
+        res.json({ success: true, credits });
+    } catch (e) {
+        console.error('Adjust credits error:', e.message);
+        res.status(500).json({ error: 'Database error' });
     }
-    db.run(`UPDATE users SET credits = MAX(credits + ?, 0) WHERE id = ?`, [delta, id], function (err) {
-        if (err) return res.status(500).json({ error: 'Database error' });
-        db.get(`SELECT credits FROM users WHERE id = ?`, [id], (e, row) => {
-            res.json({ success: true, credits: row ? row.credits : null });
-        });
-    });
 });
 
 // Change a user's role ('user' | 'admin' | 'superadmin').
 app.post('/admin/users/:id/role', authenticateToken, requireAdmin, async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = readId(req.params.id);
     const role = req.body.role;
-    if (Number.isNaN(id) || !ROLES.includes(role)) return res.status(400).json({ error: 'Invalid input' });
-    if (id === req.user.id) return res.status(400).json({ error: 'You cannot change your own role' });
+    if (!id || !ROLES.includes(role)) return res.status(400).json({ error: 'Invalid input' });
+    if (String(id) === String(req.user.id)) return res.status(400).json({ error: 'You cannot change your own role' });
 
-    const targetRole = await getRole(id);
-    if (targetRole === null || targetHiddenFromViewer(targetRole, req.viewerRole)) {
-        return res.status(404).json({ error: 'User not found' });
-    }
-    // Only a superadmin may grant the superadmin role or modify a superadmin.
-    if ((role === 'superadmin' || targetRole === 'superadmin') && req.viewerRole !== 'superadmin') {
-        return res.status(403).json({ error: 'Only a superadmin can manage the superadmin role' });
-    }
-    db.run(`UPDATE users SET role = ? WHERE id = ?`, [role, id], function (err) {
-        if (err) return res.status(500).json({ error: 'Database error' });
-        if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
+    try {
+        const targetRole = await store.getRoleById(id);
+        if (targetRole === null || targetHiddenFromViewer(targetRole, req.viewerRole)) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        // Only a superadmin may grant the superadmin role or modify a superadmin.
+        if ((role === 'superadmin' || targetRole === 'superadmin') && req.viewerRole !== 'superadmin') {
+            return res.status(403).json({ error: 'Only a superadmin can manage the superadmin role' });
+        }
+        const changed = await store.setRole(id, role);
+        if (changed === 0) return res.status(404).json({ error: 'User not found' });
         res.json({ success: true, role });
-    });
+    } catch (e) {
+        console.error('Set role error:', e.message);
+        res.status(500).json({ error: 'Database error' });
+    }
 });
 
 // Delete a user and their history.
 app.delete('/admin/users/:id', authenticateToken, requireAdmin, async (req, res) => {
-    const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid input' });
-    if (id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
+    const id = readId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid input' });
+    if (String(id) === String(req.user.id)) return res.status(400).json({ error: 'You cannot delete your own account' });
 
-    const targetRole = await getRole(id);
-    if (targetRole === null || targetHiddenFromViewer(targetRole, req.viewerRole)) {
-        return res.status(404).json({ error: 'User not found' });
-    }
-    // Only a superadmin can delete a superadmin (already hidden from admins).
-    if (targetRole === 'superadmin' && req.viewerRole !== 'superadmin') {
-        return res.status(403).json({ error: 'Only a superadmin can delete a superadmin' });
-    }
-    db.run(`DELETE FROM users WHERE id = ?`, [id], function (err) {
-        if (err) return res.status(500).json({ error: 'Database error' });
-        if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
-        db.run(`DELETE FROM history WHERE user_id = ?`, [id], () => {});
+    try {
+        const targetRole = await store.getRoleById(id);
+        if (targetRole === null || targetHiddenFromViewer(targetRole, req.viewerRole)) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        // Only a superadmin can delete a superadmin (already hidden from admins).
+        if (targetRole === 'superadmin' && req.viewerRole !== 'superadmin') {
+            return res.status(403).json({ error: 'Only a superadmin can delete a superadmin' });
+        }
+        const changed = await store.deleteUser(id);
+        if (changed === 0) return res.status(404).json({ error: 'User not found' });
         res.json({ success: true });
-    });
+    } catch (e) {
+        console.error('Delete user error:', e.message);
+        res.status(500).json({ error: 'Database error' });
+    }
 });
 
 // Error handler — turns upload/multer and other errors into clean JSON responses

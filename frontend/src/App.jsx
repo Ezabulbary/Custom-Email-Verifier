@@ -254,11 +254,30 @@ const CountPill = ({ label, value, cls }) => (
   <span className={`count-pill ${cls}`}>{label}: <strong>{value}</strong></span>
 );
 
+// Lazily fetch one batch's full per-address results (the list endpoint returns
+// summaries only). Results are cached by id so we never refetch.
+const useBatchResults = () => {
+  const cache = useRef({});
+  return useCallback(async (id) => {
+    if (cache.current[id]) return cache.current[id];
+    const batch = await apiFetch(`/history/${id}`);
+    const results = (batch && batch.results) || [];
+    cache.current[id] = results;
+    return results;
+  }, []);
+};
+
+// A readable title for a batch: its task name, or a "Type #N" fallback.
+const batchTitle = (h) => h.name || `${TYPE_LABELS[h.type] || h.type} #${h.batchNumber ?? h.id}`;
+
 const HistoryPanel = ({ type, version }) => {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
+  const [detail, setDetail] = useState(null);      // results for the expanded row
+  const [busy, setBusy] = useState(null);          // id currently downloading
   const [retentionDays, setRetentionDays] = useState(30);
+  const getResults = useBatchResults();
 
   const load = () => {
     setLoading(true);
@@ -274,6 +293,19 @@ const HistoryPanel = ({ type, version }) => {
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [type, version]);
+
+  const toggle = async (h) => {
+    if (expanded === h.id) { setExpanded(null); setDetail(null); return; }
+    setExpanded(h.id); setDetail(null);
+    try { setDetail(await getResults(h.id)); } catch { setDetail([]); }
+  };
+
+  const download = async (h) => {
+    setBusy(h.id);
+    try { downloadCSV(await getResults(h.id), `batch_${h.batchNumber ?? h.id}_${h.type}.csv`); }
+    catch (err) { alert(friendlyError(err)); }
+    finally { setBusy(null); }
+  };
 
   return (
     <div className="card history-card" style={{marginTop:'2rem'}}>
@@ -295,13 +327,14 @@ const HistoryPanel = ({ type, version }) => {
       ) : (
         <table className="results-table history-table">
           <thead>
-            <tr><th></th><th>Date &amp; Time</th><th>Total</th><th>Breakdown</th><th></th></tr>
+            <tr><th></th><th>Batch</th><th>Date &amp; Time</th><th>Total</th><th>Breakdown</th><th></th></tr>
           </thead>
           <tbody>
             {history.map((h) => (
               <React.Fragment key={h.id}>
-                <tr className="history-row" onClick={() => setExpanded(expanded === h.id ? null : h.id)}>
+                <tr className="history-row" onClick={() => toggle(h)}>
                   <td style={{width:'28px'}}>{expanded === h.id ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}</td>
+                  <td><strong>#{h.batchNumber ?? h.id}</strong> <span style={{color:'var(--text-secondary)'}}>{h.name || ''}</span></td>
                   <td>{formatDate(h.createdAt)}</td>
                   <td><strong>{h.total}</strong></td>
                   <td>
@@ -313,18 +346,20 @@ const HistoryPanel = ({ type, version }) => {
                     </div>
                   </td>
                   <td style={{textAlign:'right'}}>
-                    {h.results && h.results.length > 0 && (
-                      <button
-                        className="btn-secondary"
-                        onClick={(e) => { e.stopPropagation(); downloadCSV(h.results, `history_${h.type}_${h.id}.csv`); }}
-                      ><Download size={14}/></button>
+                    {h.total > 0 && (
+                      <button className="btn-secondary" title="Download CSV"
+                        onClick={(e) => { e.stopPropagation(); download(h); }}>
+                        {busy === h.id ? <Loader2 className="loader" size={14}/> : <Download size={14}/>}
+                      </button>
                     )}
                   </td>
                 </tr>
                 {expanded === h.id && (
                   <tr className="history-detail">
-                    <td colSpan={5}>
-                      <ResultsTable results={h.results} title="Execution results" />
+                    <td colSpan={6}>
+                      {detail === null
+                        ? <div className="history-empty"><Loader2 className="loader" size={16}/> Loading results…</div>
+                        : <ResultsTable results={detail} title={`${batchTitle(h)} — results`} />}
                     </td>
                   </tr>
                 )}
@@ -1041,10 +1076,11 @@ const DashboardLayout = ({ children }) => {
           <Link to="/"><Logo size={26} /></Link>
         </div>
         <div className="sidebar-nav">
-          <Link to="/dashboard" className={`nav-item ${location.pathname==='/dashboard'?'active':''}`}><LayoutDashboard size={18}/> Dashboard</Link>
+          <Link to="/dashboard" className={`nav-item ${location.pathname==='/dashboard'?'active':''}`}><LayoutDashboard size={18}/> Overview</Link>
           <Link to="/dashboard/single" className={`nav-item ${location.pathname==='/dashboard/single'?'active':''}`}><Search size={18}/> Single Verify</Link>
           <Link to="/dashboard/bulk" className={`nav-item ${location.pathname==='/dashboard/bulk'?'active':''}`}><List size={18}/> Bulk Verification</Link>
           <Link to="/dashboard/csv" className={`nav-item ${location.pathname==='/dashboard/csv'?'active':''}`}><Upload size={18}/> Clean a List</Link>
+          <Link to="/dashboard/tasks" className={`nav-item ${location.pathname==='/dashboard/tasks'?'active':''}`}><History size={18}/> Tasks &amp; Results</Link>
           {(user?.role === 'admin' || user?.role === 'superadmin') && (
             <Link to="/admin" className={`nav-item ${location.pathname==='/admin'?'active':''}`}><ShieldCheck size={18}/> Admin Panel</Link>
           )}
@@ -1107,6 +1143,7 @@ const SingleVerify = () => {
 
 const BulkVerify = () => {
   const [emails, setEmails] = useState('');
+  const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -1118,7 +1155,7 @@ const BulkVerify = () => {
     if(arr.length === 0) return;
     setLoading(true);
     try {
-      const data = await apiFetch('/verify/bulk', { method: 'POST', body: JSON.stringify({ emails: arr }) });
+      const data = await apiFetch('/verify/bulk', { method: 'POST', body: JSON.stringify({ emails: arr, name: name.trim() || undefined }) });
       if (data.error) throw new Error(data.error);
       setResults(data.results);
       setUser({...user, credits: user.credits - data.results.length});
@@ -1132,7 +1169,9 @@ const BulkVerify = () => {
       <div className="card" style={{padding:'2rem'}}>
         <div className="page-title">Bulk Verification</div>
         <form onSubmit={handleVerify} className="form-group">
-          <label>Paste Emails (one per line)</label>
+          <label>Task Name <span style={{color:'var(--text-secondary)', fontWeight:400}}>(optional)</span></label>
+          <input type="text" value={name} onChange={e=>setName(e.target.value)} className="input-field" placeholder="e.g. Newsletter list — July" maxLength={120} />
+          <label style={{marginTop:'1rem'}}>Paste Emails (one per line)</label>
           <textarea value={emails} onChange={e=>setEmails(e.target.value)} className="input-field" style={{minHeight:'200px'}} required/>
           <button type="submit" className="btn-primary" disabled={loading} style={{marginTop:'1rem', width:'max-content'}}>
             {loading ? <Loader2 className="loader" size={18}/> : <List size={18}/>} Verify List
@@ -1147,6 +1186,7 @@ const BulkVerify = () => {
 
 const CsvVerify = () => {
   const [file, setFile] = useState(null);
+  const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -1157,6 +1197,7 @@ const CsvVerify = () => {
     if(!file) return;
     const formData = new FormData();
     formData.append('file', file);
+    if (name.trim()) formData.append('name', name.trim());
     setLoading(true);
     try {
       const data = await apiFetch('/verify/csv', { method: 'POST', body: formData });
@@ -1173,6 +1214,10 @@ const CsvVerify = () => {
     <div>
       <div className="card" style={{padding:'2rem'}}>
         <div className="page-title">Clean a List (CSV)</div>
+        <div className="form-group" style={{marginBottom:'1.25rem'}}>
+          <label>Task Name <span style={{color:'var(--text-secondary)', fontWeight:400}}>(optional)</span></label>
+          <input type="text" value={name} onChange={e=>setName(e.target.value)} className="input-field" placeholder="e.g. CRM export — Q3" maxLength={120} />
+        </div>
         <div
           className="upload-area"
           onClick={() => fileInputRef.current.click()}
@@ -1205,40 +1250,87 @@ const StatCard = ({ label, value, accent }) => (
   </div>
 );
 
+// Reoon-style "Lifetime Usage Statistics" donut. Pure SVG, no chart library.
+// `segments` = [{ label, value, color }]. Renders a doughnut with the grand
+// total in the middle and a legend on the side.
+const DonutBreakdown = ({ segments, total }) => {
+  const size = 200, stroke = 30, r = (size - stroke) / 2, c = 2 * Math.PI * r;
+  const sum = segments.reduce((a, s) => a + s.value, 0) || 1;
+  // Precompute each arc's length and starting offset (no mutation during render).
+  const arcs = [];
+  let running = 0;
+  for (const s of segments) {
+    if (s.value > 0) { arcs.push({ ...s, len: (s.value / sum) * c, offset: running }); running += (s.value / sum) * c; }
+  }
+  return (
+    <div className="donut-wrap">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="donut-svg">
+        <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
+          <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border-color)" strokeWidth={stroke} />
+          {arcs.map((a, i) => (
+            <circle key={i} cx={size/2} cy={size/2} r={r} fill="none"
+              stroke={a.color} strokeWidth={stroke}
+              strokeDasharray={`${a.len} ${c - a.len}`} strokeDashoffset={-a.offset} />
+          ))}
+        </g>
+        <text x="50%" y="46%" textAnchor="middle" className="donut-center-label">total</text>
+        <text x="50%" y="58%" textAnchor="middle" className="donut-center-total">{total.toLocaleString()}</text>
+      </svg>
+      <div className="donut-legend">
+        {segments.map((s, i) => (
+          <div key={i} className="donut-legend-row">
+            <span className="donut-dot" style={{ background: s.color }} />
+            <span className="donut-legend-label">{s.label}:</span>
+            <strong>{s.value.toLocaleString()}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const DashboardHome = () => {
   const { user } = useAuth();
   const [stats, setStats] = useState(null);
 
   useEffect(() => {
-    apiFetch('/history/stats').then(d => { if (d && !d.error) setStats(d); }).catch(() => {});
+    apiFetch('/history/stats/overview').then(d => { if (d && !d.error) setStats(d); }).catch(() => {});
   }, []);
 
   const totalEmails = stats?.totalEmails ?? 0;
-  const valid = stats?.counts?.valid ?? 0;
-  const validRate = totalEmails > 0 ? Math.round((valid / totalEmails) * 100) : 0;
+  const counts = stats?.counts || { valid: 0, invalid: 0, catchAll: 0, unknown: 0, disposable: 0 };
+  const validRate = totalEmails > 0 ? Math.round((counts.valid / totalEmails) * 100) : 0;
+  // "Invalid" slice excludes disposable so the two don't double-count.
+  const invalidOnly = Math.max((counts.invalid || 0) - (counts.disposable || 0), 0);
+  const segments = [
+    { label: 'Valid', value: counts.valid || 0, color: '#059669' },
+    { label: 'Catch-all', value: counts.catchAll || 0, color: '#d97706' },
+    { label: 'Disposable', value: counts.disposable || 0, color: '#7c3aed' },
+    { label: 'Invalid', value: invalidOnly, color: '#dc2626' },
+    { label: 'Unknown', value: counts.unknown || 0, color: '#64748b' },
+  ];
 
   return (
     <div>
-      <div className="page-title">Dashboard Overview</div>
-      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))', gap:'1.5rem'}}>
-        <StatCard label="Available Credits" value={user?.credits ?? 0} accent="var(--accent-color)" />
-        <StatCard label="Emails Verified (30d)" value={totalEmails} />
+      <div className="page-title">Overview</div>
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:'1.5rem'}}>
+        <StatCard label="Available Credits" value={(user?.credits ?? 0).toLocaleString()} accent="var(--accent-color)" />
+        <StatCard label="Emails Verified (30d)" value={totalEmails.toLocaleString()} />
         <StatCard label="Lists Cleaned (30d)" value={stats?.listsCleaned ?? 0} />
         <StatCard label="Valid Rate (30d)" value={`${validRate}%`} accent="#059669" />
       </div>
 
-      {stats && totalEmails > 0 && (
-        <div className="card" style={{padding:'2rem', marginTop:'1.5rem'}}>
-          <div style={{fontWeight:600, marginBottom:'1rem'}}>Last 30 days breakdown</div>
-          <div className="pill-row" style={{gap:'0.75rem'}}>
-            <CountPill label="Valid" value={stats.counts.valid} cls="valid" />
-            <CountPill label="Invalid" value={stats.counts.invalid} cls="invalid" />
-            <CountPill label="Catch-all" value={stats.counts.catchAll} cls="catch-all" />
-            <CountPill label="Unknown" value={stats.counts.unknown} cls="unknown" />
-            <span className="count-pill" style={{marginLeft:'auto'}}>Executions: <strong>{stats.executions}</strong></span>
-          </div>
+      <div className="card" style={{padding:'2rem', marginTop:'1.5rem'}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'0.5rem', flexWrap:'wrap', gap:'0.5rem'}}>
+          <h3 style={{fontSize:'1.15rem'}}>Usage Statistics</h3>
+          <span style={{color:'var(--text-secondary)', fontSize:'0.9rem'}}>last {stats?.retentionDays ?? 30} days · {stats?.executions ?? 0} executions</span>
         </div>
-      )}
+        {totalEmails > 0 ? (
+          <DonutBreakdown segments={segments} total={totalEmails} />
+        ) : (
+          <div className="history-empty">No verifications yet. Run a check from <strong>Email Verification</strong> and your stats will appear here.</div>
+        )}
+      </div>
     </div>
   );
 };
@@ -1416,6 +1508,146 @@ const GDPR = () => (
   </LegalPage>
 );
 
+// --- Tasks & Results (all execution batches, Reoon-style) ---
+
+const PAGE_SIZE = 10;
+
+const TasksResults = () => {
+  const [batches, setBatches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const [expanded, setExpanded] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [retentionDays, setRetentionDays] = useState(30);
+  const getResults = useBatchResults();
+
+  const load = () => {
+    setLoading(true);
+    apiFetch('/history?limit=500')
+      .then(data => {
+        if (data && Array.isArray(data.history)) {
+          setBatches(data.history);
+          if (data.retentionDays) setRetentionDays(data.retentionDays);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+  useEffect(() => { setPage(1); }, [filter]);
+
+  const filtered = filter === 'all' ? batches : batches.filter(b => b.type === filter);
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const current = Math.min(page, pages);
+  const rows = filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
+
+  const toggle = async (b) => {
+    if (expanded === b.id) { setExpanded(null); setDetail(null); return; }
+    setExpanded(b.id); setDetail(null);
+    try { setDetail(await getResults(b.id)); } catch { setDetail([]); }
+  };
+  const download = async (b) => {
+    setBusy(b.id);
+    try { downloadCSV(await getResults(b.id), `batch_${b.batchNumber ?? b.id}_${b.type}.csv`); }
+    catch (err) { alert(friendlyError(err)); }
+    finally { setBusy(null); }
+  };
+
+  return (
+    <div>
+      <div className="page-title">Tasks &amp; Results</div>
+      <p style={{color:'var(--text-secondary)', marginTop:'-0.5rem', marginBottom:'1.25rem'}}>
+        Every single, bulk and CSV verification is stored as a numbered batch and kept for {retentionDays} days.
+      </p>
+
+      <div className="card" style={{padding:0, overflow:'hidden'}}>
+        <div className="history-header">
+          <div style={{display:'flex', alignItems:'center', gap:'0.75rem', flexWrap:'wrap'}}>
+            <div className="tabs">
+              {['all', 'single', 'bulk', 'csv'].map(t => (
+                <button key={t} className={`tab ${filter === t ? 'active' : ''}`} onClick={() => setFilter(t)}>
+                  {t === 'all' ? 'All' : (TYPE_LABELS[t] || t)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button className="btn-secondary" onClick={load}><RefreshCw size={15} className={loading ? 'loader' : ''}/> Refresh</button>
+        </div>
+
+        {loading && batches.length === 0 ? (
+          <div className="history-empty"><Loader2 className="loader" size={18}/> Loading…</div>
+        ) : filtered.length === 0 ? (
+          <div className="history-empty">No verification tasks yet. Run a check from <strong>Email Verification</strong>.</div>
+        ) : (
+          <div style={{overflowX:'auto'}}>
+            <table className="results-table tasks-table">
+              <thead>
+                <tr>
+                  <th></th><th>Batch #</th><th>Date Started</th><th>Task Name</th>
+                  <th>Type</th><th>Status</th><th>Total</th><th>Breakdown</th><th style={{textAlign:'right'}}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(b => (
+                  <React.Fragment key={b.id}>
+                    <tr className="history-row" onClick={() => toggle(b)}>
+                      <td style={{width:'24px'}}>{expanded === b.id ? <ChevronDown size={15}/> : <ChevronRight size={15}/>}</td>
+                      <td><strong>#{b.batchNumber ?? b.id}</strong></td>
+                      <td style={{whiteSpace:'nowrap'}}>{formatDate(b.createdAt)}</td>
+                      <td>{b.name || <span style={{color:'var(--text-secondary)'}}>Untitled</span>}</td>
+                      <td><span className={`badge type-${b.type}`}>{TYPE_LABELS[b.type] || b.type}</span></td>
+                      <td><span className="badge valid">Completed</span></td>
+                      <td><strong>{b.total}</strong></td>
+                      <td>
+                        <div className="pill-row">
+                          <CountPill label="Valid" value={b.counts.valid} cls="valid" />
+                          <CountPill label="Invalid" value={b.counts.invalid} cls="invalid" />
+                          <CountPill label="Catch-all" value={b.counts.catchAll} cls="catch-all" />
+                          <CountPill label="Unknown" value={b.counts.unknown} cls="unknown" />
+                        </div>
+                      </td>
+                      <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
+                        {b.total > 0 && (
+                          <button className="btn-secondary" title="Download CSV"
+                            onClick={(e) => { e.stopPropagation(); download(b); }}>
+                            {busy === b.id ? <Loader2 className="loader" size={14}/> : <Download size={14}/>} Download
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {expanded === b.id && (
+                      <tr className="history-detail">
+                        <td colSpan={9}>
+                          {detail === null
+                            ? <div className="history-empty"><Loader2 className="loader" size={16}/> Loading results…</div>
+                            : <ResultsTable results={detail} title={`${batchTitle(b)} — results`} />}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {filtered.length > PAGE_SIZE && (
+          <div className="tasks-pager">
+            <span>Showing {(current - 1) * PAGE_SIZE + 1}–{Math.min(current * PAGE_SIZE, filtered.length)} of {filtered.length}</span>
+            <div className="pager-btns">
+              <button className="btn-secondary" disabled={current <= 1} onClick={() => setPage(current - 1)}>←</button>
+              <span className="pager-current">{current} / {pages}</span>
+              <button className="btn-secondary" disabled={current >= pages} onClick={() => setPage(current + 1)}>→</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // --- Admin Panel ---
 
 const ROLE_LABELS = { user: 'User', admin: 'Admin', superadmin: 'Super Admin' };
@@ -1551,6 +1783,7 @@ function AppRoutes() {
       <Route path="/dashboard/single" element={<ProtectedRoute><SingleVerify /></ProtectedRoute>} />
       <Route path="/dashboard/bulk" element={<ProtectedRoute><BulkVerify /></ProtectedRoute>} />
       <Route path="/dashboard/csv" element={<ProtectedRoute><CsvVerify /></ProtectedRoute>} />
+      <Route path="/dashboard/tasks" element={<ProtectedRoute><TasksResults /></ProtectedRoute>} />
       <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPanel /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" />} />
     </Routes>
