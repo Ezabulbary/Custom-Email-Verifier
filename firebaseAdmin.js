@@ -15,7 +15,10 @@
 let enabled = false;
 let firestore = null;
 let authInstance = null;
-const wantFirestore = process.env.USE_FIRESTORE === '1';
+// Cloud Firestore is the data store whenever a Firebase service account is
+// configured. Set USE_FIRESTORE=0 to force local SQLite even with Firebase set
+// up (e.g. if you only want Google sign-in, not Firestore storage).
+const firestoreDisabled = process.env.USE_FIRESTORE === '0';
 
 try {
     const { initializeApp, getApps, cert, applicationDefault } = require('firebase-admin/app');
@@ -44,31 +47,27 @@ try {
         enabled = true;
         console.log('[Auth] Firebase Admin initialised — Google sign-in enabled.');
 
-        // --- Cloud Firestore (optional data store) ---
-        // Reuses the same initialised app. Enabled only when USE_FIRESTORE=1;
-        // otherwise the app uses local SQLite (see store.js).
-        if (wantFirestore) {
+        // --- Cloud Firestore data store ---
+        // Reuses the same initialised app. Active by default once Firebase is
+        // configured; USE_FIRESTORE=0 forces local SQLite instead.
+        if (!firestoreDisabled) {
             try {
                 const { getFirestore: adminGetFirestore } = require('firebase-admin/firestore');
                 firestore = adminGetFirestore(app);
                 firestore.settings({ ignoreUndefinedProperties: true });
-                console.log('[Store] Cloud Firestore enabled — users & batches will be stored in Firestore.');
+                console.log('[Store] Cloud Firestore enabled — all data will be stored in Firestore.');
             } catch (e) {
                 firestore = null;
-                console.warn('[Store] USE_FIRESTORE=1 but Firestore could not be initialised — falling back to SQLite:', e.message);
+                console.warn('[Store] Firestore could not be initialised — falling back to SQLite:', e.message);
             }
+        } else {
+            console.log('[Store] USE_FIRESTORE=0 — Firestore disabled, using local SQLite.');
         }
     } else {
-        console.warn('[Auth] Firebase service account not set — Google sign-in disabled.');
-        if (wantFirestore) {
-            console.warn('[Store] USE_FIRESTORE=1 but no Firebase service account is set — falling back to SQLite.');
-        }
+        console.warn('[Auth] Firebase service account not set — Google sign-in disabled, using local SQLite.');
     }
 } catch (e) {
-    console.warn('[Auth] firebase-admin unavailable — Google sign-in disabled:', e.message);
-    if (wantFirestore) {
-        console.warn('[Store] USE_FIRESTORE=1 but firebase-admin is unavailable — falling back to SQLite.');
-    }
+    console.warn('[Auth] firebase-admin unavailable — Google sign-in disabled, using local SQLite:', e.message);
 }
 
 const isGoogleEnabled = () => enabled;

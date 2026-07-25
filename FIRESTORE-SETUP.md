@@ -15,17 +15,22 @@ everything automatically on first use. You only need 2 things on the server.
 > need to set `GOOGLE_APPLICATION_CREDENTIALS`. (It's already git-ignored, so it
 > won't be committed.)
 
-## Step 2 — Enable Firestore in `.env`
+## Step 2 — `.env` (JWT secret)
 
-Create/edit the file **`.env`** in the project root and make sure it has:
+Once `serviceAccount.json` is present, Firestore turns on **automatically** — you
+do NOT need `USE_FIRESTORE=1`. All data then saves to Firestore only; SQLite is
+not used (no `users.sqlite` is created).
+
+Just set a `JWT_SECRET` in **`.env`** (project root):
 
 ```
-USE_FIRESTORE=1
 JWT_SECRET=fe9067b9058955ee99f3fddd3a0372220b53cfcf795a68c3b31b878abec346acb2577d1f066a3c5122a02e5729a0268c
 ```
 
 (The `JWT_SECRET` above was generated for you — keep it private. Generate your own
 with `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`.)
+
+> To force local SQLite even with Firebase configured, set `USE_FIRESTORE=0`.
 
 ## Step 3 — Run
 
@@ -43,7 +48,7 @@ The startup log should show:
 ```
 [Auth] Using ./serviceAccount.json
 [Auth] Firebase Admin initialised — Google sign-in enabled.
-[Store] Cloud Firestore enabled — users & batches will be stored in Firestore.
+[Store] Cloud Firestore enabled — all data will be stored in Firestore.
 [Store] Active data store: FIRESTORE
 ```
 

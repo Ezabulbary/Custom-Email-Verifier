@@ -14,8 +14,12 @@
 //   users/{emailLower}/batches/{autoId}        -> one execution batch
 //   password_resets/{tokenHash}                -> reset token
 
-const db = require('./db');
 const { isFirestoreEnabled, getFirestore } = require('./firebaseAdmin');
+
+// SQLite is loaded lazily — only when it's actually the active store — so that
+// running on Firestore never opens a connection or creates users.sqlite.
+let _db = null;
+const db = () => (_db || (_db = require('./db')));
 
 const HISTORY_RETENTION_DAYS = 30;
 const HISTORY_MAX_STORED_RESULTS = 5000;   // cap stored payload per execution
@@ -63,9 +67,9 @@ function cleanProfile(fields) {
 // ===========================================================================
 
 const sql = {
-    get: (q, p = []) => new Promise((res, rej) => db.get(q, p, (e, row) => e ? rej(e) : res(row || null))),
-    all: (q, p = []) => new Promise((res, rej) => db.all(q, p, (e, rows) => e ? rej(e) : res(rows || []))),
-    run: (q, p = []) => new Promise((res, rej) => db.run(q, p, function (e) { e ? rej(e) : res(this); })),
+    get: (q, p = []) => new Promise((res, rej) => db().get(q, p, (e, row) => e ? rej(e) : res(row || null))),
+    all: (q, p = []) => new Promise((res, rej) => db().all(q, p, (e, rows) => e ? rej(e) : res(rows || []))),
+    run: (q, p = []) => new Promise((res, rej) => db().run(q, p, function (e) { e ? rej(e) : res(this); })),
 };
 
 const sqliteStore = {
