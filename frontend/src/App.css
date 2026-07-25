@@ -884,3 +884,12 @@
   .three-col { grid-template-columns: 1fr; }
   .profile-trigger-text { display: none; }
 }
+
+/* --- Sidebar credits (bottom-left, above Logout) --- */
+.sidebar-credits {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin: 0 0.25rem 0.5rem; padding: 0.7rem 1rem;
+  background: #f1f5f9; border-radius: 10px;
+  font-weight: 600; color: var(--accent-color); font-size: 0.95rem;
+}
+.sidebar-credits strong { color: var(--text-primary); }

@@ -673,10 +673,7 @@ const PublicNav = () => {
           </nav>
           <div className="nav-actions">
             {user ? (
-              <>
-                <Link to="/dashboard" className="nav-cta" onClick={close}>Dashboard</Link>
-                <ProfileMenu />
-              </>
+              <Link to="/dashboard" className="nav-cta" onClick={close}>Dashboard</Link>
             ) : (
               <>
                 <Link to="/login" className="nav-login" onClick={close}>Login</Link>
@@ -1142,12 +1139,12 @@ const DashboardLayout = ({ children }) => {
             <Link to="/admin" className={`nav-item ${location.pathname==='/admin'?'active':''}`}><ShieldCheck size={18}/> Admin Panel</Link>
           )}
           <div style={{flex:1}}></div>
+          <div className="sidebar-credits"><Zap size={15}/> Credits: <strong>{(user?.credits ?? 0).toLocaleString()}</strong></div>
           <button onClick={logout} className="nav-item" style={{width:'100%', textAlign:'left'}}><LogOut size={18}/> Logout</button>
         </div>
       </div>
       <div className="main-content">
         <div className="top-header">
-          <div className="credits-badge">Credits: {(user?.credits ?? 0).toLocaleString()}</div>
           <ProfileMenu />
         </div>
         <div className="page-content">
