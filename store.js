@@ -292,6 +292,10 @@ const cutoffMs = () => Date.now() - HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1000
 
 function firestoreStore() {
     const fs = getFirestore();
+    // Modular FieldValue — the legacy `require('firebase-admin').firestore`
+    // namespace is undefined in recent versions.
+    const { FieldValue } = require('firebase-admin/firestore');
+    const serverTimestamp = () => FieldValue.serverTimestamp();
     const users = fs.collection('users');
     const resets = fs.collection('password_resets');
     const uid = (email) => String(email).trim().toLowerCase();
@@ -356,7 +360,7 @@ function firestoreStore() {
                 tx.set(ref, {
                     email, emailLower: uid(email), password: password ?? null,
                     credits, role, batchSeq: 0,
-                    createdAt: require('firebase-admin').firestore.FieldValue.serverTimestamp(),
+                    createdAt: serverTimestamp(),
                 });
                 return true;
             });
@@ -459,7 +463,6 @@ function firestoreStore() {
             const bref = uref.collection('batches').doc();
             const s = summarize(results);
             const stored = JSON.stringify(fitResults(results));
-            const admin = require('firebase-admin');
             const batchNumber = await fs.runTransaction(async (tx) => {
                 const usnap = await tx.get(uref);
                 const seq = ((usnap.exists && usnap.data().batchSeq) || 0) + 1;
@@ -469,7 +472,7 @@ function firestoreStore() {
                     total: s.total, valid: s.valid, invalid: s.invalid,
                     catchAll: s.catchAll, unknown: s.unknown, disposable: s.disposable,
                     results: stored,
-                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                    createdAt: serverTimestamp(),
                 });
                 return seq;
             });

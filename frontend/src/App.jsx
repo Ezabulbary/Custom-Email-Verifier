@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
-import { Mail, List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Star, Quote, Phone, User } from 'lucide-react';
+import { List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Star, Quote, Phone, User } from 'lucide-react';
 import './App.css';
 import { googleSignIn } from './firebase';
 
@@ -570,10 +570,12 @@ const FaqItem = ({ q, a }) => {
   );
 };
 
-// Display name from profile, falling back to email.
+// Display name for the profile trigger: the user's name, or the email's local
+// part (before @) as a name-like fallback — never the full email.
 const displayName = (u) => {
   const n = `${u?.firstName || ''} ${u?.lastName || ''}`.trim();
-  return n || u?.email || 'Account';
+  if (n) return n;
+  return u?.email ? u.email.split('@')[0] : 'Account';
 };
 
 // Reusable account dropdown (top-right corner). Shown when signed in — in the
@@ -1119,7 +1121,7 @@ const Register = () => {
 };
 
 const DashboardLayout = ({ children }) => {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const location = useLocation();
 
   return (
@@ -1140,7 +1142,6 @@ const DashboardLayout = ({ children }) => {
           )}
           <div style={{flex:1}}></div>
           <div className="sidebar-credits"><Zap size={15}/> Credits: <strong>{(user?.credits ?? 0).toLocaleString()}</strong></div>
-          <button onClick={logout} className="nav-item" style={{width:'100%', textAlign:'left'}}><LogOut size={18}/> Logout</button>
         </div>
       </div>
       <div className="main-content">
