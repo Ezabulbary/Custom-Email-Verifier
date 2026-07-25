@@ -2,7 +2,15 @@ const sqlite3 = require('sqlite3');
 const jwt = require('jsonwebtoken');
 const http = require('http');
 
-const JWT_SECRET = 'super-secret-key-123';
+// Must match the server's secret. The server reads JWT_SECRET from the
+// environment, so read it the same way here — otherwise the token it signs
+// will be rejected by the API with 403 Forbidden.
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    console.error('ERROR: JWT_SECRET is not set. Start diagnose with the same JWT_SECRET the server uses,');
+    console.error('e.g.  JWT_SECRET=your-secret node diagnose.js');
+    process.exit(1);
+}
 const db = new sqlite3.Database('users.sqlite');
 
 // Step 1: Check DB
@@ -11,10 +19,10 @@ db.all('SELECT id, email, credits, role FROM users', [], (err, users) => {
     if (err) console.error('DB ERROR:', err.message);
     else console.log(JSON.stringify(users, null, 2));
 
-    // Step 2: Generate a super_admin token
-    const superAdminUser = users.find(u => u.role === 'super_admin');
+    // Step 2: Generate a superadmin token
+    const superAdminUser = users.find(u => u.role === 'superadmin');
     if (!superAdminUser) {
-        console.log('ERROR: No super_admin user found!');
+        console.log('ERROR: No superadmin user found!');
         db.close();
         return;
     }
