@@ -1,3 +1,15 @@
+// Load environment variables from a local .env file if present, so `node
+// server.js` works without the --env-file flag (Node 20.12+). This must run
+// before any module that reads process.env at import time (e.g. firebaseAdmin).
+try {
+    const _fs = require('fs');
+    const _envPath = require('path').join(__dirname, '.env');
+    if (typeof process.loadEnvFile === 'function' && _fs.existsSync(_envPath)) {
+        process.loadEnvFile(_envPath);
+        console.log('[Env] Loaded .env');
+    }
+} catch (e) { /* older Node or no .env — fall back to real environment vars */ }
+
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');

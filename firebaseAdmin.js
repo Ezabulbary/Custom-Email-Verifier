@@ -1,5 +1,4 @@
-// Optional Firebase Admin — used to verify Google sign-in ID tokens,
-// and optionally to initialise Firestore (when USE_FIRESTORE=1).
+// Optional Firebase Admin — used ONLY to verify Google sign-in ID tokens.
 //
 // It self-enables when a service account is provided, via either:
 //   - FIREBASE_SERVICE_ACCOUNT       = the service-account JSON, stringified
@@ -7,34 +6,22 @@
 //
 // If neither is set (or firebase-admin isn't installed), Google sign-in is
 // simply disabled and the email/password flow keeps working unchanged.
-
-let verifyTokenFn = null;
-let firestoreDb = null;
+let admin = null;
 let enabled = false;
 
 try {
-    const { initializeApp, cert, applicationDefault, getApps } = require('firebase-admin/app');
-    const { getAuth } = require('firebase-admin/auth');
-
+    const firebaseAdmin = require('firebase-admin');
     let credential = null;
 
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-        credential = cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT));
+        credential = firebaseAdmin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT));
     } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-        credential = applicationDefault();
+        credential = firebaseAdmin.credential.applicationDefault();
     }
 
     if (credential) {
-        const app = getApps().length === 0
-            ? initializeApp({ credential })
-            : getApps()[0];
-        const auth = getAuth(app);
-        verifyTokenFn = (idToken) => auth.verifyIdToken(idToken);
-        // Lazily provide Firestore if USE_FIRESTORE is requested
-        if (process.env.USE_FIRESTORE === '1') {
-            const { getFirestore: gfs } = require('firebase-admin/firestore');
-            firestoreDb = gfs(app);
-        }
+        firebaseAdmin.initializeApp({ credential });
+        admin = firebaseAdmin;
         enabled = true;
         console.log('[Auth] Firebase Admin initialised — Google sign-in enabled.');
     } else {
@@ -45,12 +32,38 @@ try {
 }
 
 const isGoogleEnabled = () => enabled;
-const isFirestoreEnabled = () => enabled && firestoreDb !== null;
-const getFirestore = () => firestoreDb;
 
 const verifyIdToken = async (idToken) => {
     if (!enabled) throw new Error('Google sign-in is not configured on the server.');
-    return verifyTokenFn(idToken);
+    return admin.auth().verifyIdToken(idToken);
 };
 
-module.exports = { isGoogleEnabled, isFirestoreEnabled, getFirestore, verifyIdToken };
+// --- Cloud Firestore (optional data store) ---
+//
+// Firestore reuses the same initialised Firebase Admin app. It is used as the
+// primary data store ONLY when USE_FIRESTORE=1 AND a service account is
+// configured; otherwise the app falls back to local SQLite (see store.js).
+// This keeps the app working out-of-the-box while letting you flip a single
+// env var to move users + verification batches into Cloud Firestore.
+let firestore = null;
+const wantFirestore = process.env.USE_FIRESTORE === '1';
+
+if (wantFirestore) {
+    if (enabled) {
+        try {
+            firestore = admin.firestore();
+            firestore.settings({ ignoreUndefinedProperties: true });
+            console.log('[Store] Cloud Firestore enabled — users & batches will be stored in Firestore.');
+        } catch (e) {
+            firestore = null;
+            console.warn('[Store] USE_FIRESTORE=1 but Firestore could not be initialised — falling back to SQLite:', e.message);
+        }
+    } else {
+        console.warn('[Store] USE_FIRESTORE=1 but no Firebase service account is set — falling back to SQLite.');
+    }
+}
+
+const isFirestoreEnabled = () => firestore !== null;
+const getFirestore = () => firestore;
+
+module.exports = { isGoogleEnabled, verifyIdToken, isFirestoreEnabled, getFirestore };

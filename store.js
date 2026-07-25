@@ -426,13 +426,24 @@ function firestoreStore() {
             return { id: bref.id, batchNumber, name: name || null, type, total: s.total, counts: countsFrom(s), createdAt: new Date().toISOString() };
         },
         async listBatches(userId, { type, limit }) {
-            let q = users.doc(String(userId)).collection('batches').orderBy('createdAt', 'desc');
-            if (type) q = q.where('type', '==', type);
-            const snap = await q.limit(limit).get();
+            const col = users.doc(String(userId)).collection('batches');
             const cut = cutoffMs();
-            return snap.docs
+            // When filtering by type we use an equality-only query and sort in JS,
+            // so Firestore needs only its automatic single-field indexes — no
+            // manual composite (type + createdAt) index to create.
+            let docs;
+            if (type) {
+                const snap = await col.where('type', '==', type).get();
+                docs = snap.docs;
+            } else {
+                const snap = await col.orderBy('createdAt', 'desc').limit(limit).get();
+                docs = snap.docs;
+            }
+            return docs
                 .map(d => batchView(d, false))
-                .filter(b => !b.createdAt || new Date(b.createdAt).getTime() >= cut);
+                .filter(b => !b.createdAt || new Date(b.createdAt).getTime() >= cut)
+                .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+                .slice(0, limit);
         },
         async getBatch(userId, id) {
             const doc = await users.doc(String(userId)).collection('batches').doc(String(id)).get();
@@ -459,13 +470,18 @@ function firestoreStore() {
             return st;
         },
         async cleanupOldBatches() {
+            // Walk each user's batches subcollection and delete expired ones. Using
+            // per-user subcollection range queries (auto-indexed) avoids needing a
+            // manual collection-group index on createdAt.
             const cut = new Date(cutoffMs());
-            const snap = await fs.collectionGroup('batches')
-                .where('createdAt', '<', cut).limit(400).get();
-            if (snap.empty) return;
-            const batch = fs.batch();
-            snap.forEach(d => batch.delete(d.ref));
-            await batch.commit();
+            const usersSnap = await users.get();
+            for (const u of usersSnap.docs) {
+                const old = await u.ref.collection('batches').where('createdAt', '<', cut).limit(400).get();
+                if (old.empty) continue;
+                const batch = fs.batch();
+                old.forEach(d => batch.delete(d.ref));
+                await batch.commit();
+            }
         },
         async adminStats({ viewerRole }) {
             const snap = await users.get();
