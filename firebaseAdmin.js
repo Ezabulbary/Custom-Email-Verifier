@@ -1,4 +1,5 @@
-// Optional Firebase Admin — used ONLY to verify Google sign-in ID tokens.
+// Optional Firebase Admin — used to verify Google sign-in ID tokens,
+// and optionally to initialise Firestore (when USE_FIRESTORE=1).
 //
 // It self-enables when a service account is provided, via either:
 //   - FIREBASE_SERVICE_ACCOUNT       = the service-account JSON, stringified
@@ -8,6 +9,7 @@
 // simply disabled and the email/password flow keeps working unchanged.
 
 let verifyTokenFn = null;
+let firestoreDb = null;
 let enabled = false;
 
 try {
@@ -28,6 +30,11 @@ try {
             : getApps()[0];
         const auth = getAuth(app);
         verifyTokenFn = (idToken) => auth.verifyIdToken(idToken);
+        // Lazily provide Firestore if USE_FIRESTORE is requested
+        if (process.env.USE_FIRESTORE === '1') {
+            const { getFirestore: gfs } = require('firebase-admin/firestore');
+            firestoreDb = gfs(app);
+        }
         enabled = true;
         console.log('[Auth] Firebase Admin initialised — Google sign-in enabled.');
     } else {
@@ -38,10 +45,12 @@ try {
 }
 
 const isGoogleEnabled = () => enabled;
+const isFirestoreEnabled = () => enabled && firestoreDb !== null;
+const getFirestore = () => firestoreDb;
 
 const verifyIdToken = async (idToken) => {
     if (!enabled) throw new Error('Google sign-in is not configured on the server.');
     return verifyTokenFn(idToken);
 };
 
-module.exports = { isGoogleEnabled, verifyIdToken };
+module.exports = { isGoogleEnabled, isFirestoreEnabled, getFirestore, verifyIdToken };
