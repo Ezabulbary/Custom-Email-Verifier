@@ -108,15 +108,20 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
-    # Proxy API paths to the Node backend
-    location ~ ^/(auth|verify|health) {
+    # Proxy ALL API paths to the Node backend. IMPORTANT: this must include
+    # every API prefix the app uses — auth, verify, history, admin, health.
+    # If any is missing, requests to it fall through to `location /` and get
+    # index.html back (HTTP 200 HTML), which the frontend reports as
+    # "The server returned an unexpected response (HTTP 200)".
+    location ~ ^/(auth|verify|history|admin|health) {
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        client_max_body_size 3m;   # allow CSV uploads (backend caps at 2 MB)
+        proxy_read_timeout 300s;    # background jobs return fast, but be generous
+        client_max_body_size 20m;   # allow large CSV uploads (backend caps at 15 MB)
     }
 }
 ```

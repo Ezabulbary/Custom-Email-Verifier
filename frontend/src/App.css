@@ -901,3 +901,30 @@
 .job-progress-track { height: 8px; background: var(--border-color); border-radius: 99px; overflow: hidden; }
 .job-progress-fill { height: 100%; background: var(--accent-color); border-radius: 99px; transition: width 0.4s ease; }
 .job-progress-note { display: block; margin-top: 0.5rem; font-size: 0.78rem; color: var(--text-secondary); }
+
+/* --- Unified Email Verification page --- */
+.verify-single-card { padding: 1.5rem 1.75rem; margin-bottom: 1.5rem; }
+.verify-single-card label { display: block; font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.5rem; }
+.verify-single-row { display: flex; gap: 0.75rem; }
+.verify-single-row .input-field { flex: 1; }
+.verify-single-row .btn-primary { width: max-content; white-space: nowrap; }
+.verify-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
+.verify-grid .card { padding: 1.75rem; }
+.verify-opt-title { display: flex; align-items: center; gap: 0.5rem; font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 1rem; }
+.muted-inline { color: var(--text-secondary); font-weight: 400; font-size: 0.85rem; }
+
+@media (max-width: 860px) {
+  .verify-grid { grid-template-columns: 1fr; }
+  .verify-single-row { flex-direction: column; }
+  .verify-single-row .btn-primary { width: 100%; justify-content: center; }
+}
+
+/* --- Bounce Rate page --- */
+.bounce-hero { padding: 2rem; }
+.bounce-main { display: flex; align-items: center; gap: 1.5rem; }
+.bounce-pct { font-size: 3.5rem; font-weight: 800; line-height: 1; }
+.bounce-label { font-size: 1.05rem; font-weight: 600; color: var(--text-primary); }
+.bounce-stats { display: flex; flex-wrap: wrap; gap: 1.25rem; margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid var(--border-color); }
+.bounce-stats > div { display: flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); font-size: 0.95rem; }
+.bounce-stats strong { color: var(--text-primary); }
+.bounce-stats .dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }

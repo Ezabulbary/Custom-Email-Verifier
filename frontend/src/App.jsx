@@ -238,11 +238,20 @@ const buildCSV = (results) => {
     if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;   // neutralise formula injection
     return `"${s.replace(/"/g, '""')}"`;
   };
-  const headers = ['Email', 'Status', 'Confidence', 'Provider', 'Syntax', 'Disposable', 'MX Found', 'SMTP Code', 'Catch-All', 'Reason'];
+  // Preserve every ORIGINAL column from the uploaded file (r.source), in first-
+  // seen order, then append the verification columns. For single/bulk (no
+  // source) only the verification columns are written.
+  const sourceKeys = [];
+  for (const r of results) {
+    if (r && r.source) for (const k of Object.keys(r.source)) if (!sourceKeys.includes(k)) sourceKeys.push(k);
+  }
+  const verifyCols = ['Verification Email', 'Verification Status', 'Confidence', 'Provider', 'Disposable', 'MX Found', 'Catch-All', 'Reason'];
+  const headers = [...sourceKeys, ...verifyCols];
   return [
     headers.join(','),
     ...results.map(r => [
-      r.email, r.status, r.confidence, r.provider, r.syntax, r.disposable, r.mxFound, r.smtpCode, r.isCatchAll, r.reason
+      ...sourceKeys.map(k => (r.source && r.source[k] != null) ? r.source[k] : ''),
+      r.email, r.status, r.confidence, r.provider, r.disposable, r.mxFound, r.isCatchAll, r.reason
     ].map(csvCell).join(','))
   ].join('\n');
 };
@@ -332,7 +341,7 @@ const HistoryPanel = ({ type, version }) => {
 
   const load = () => {
     setLoading(true);
-    apiFetch(`/history?type=${type}&limit=100`)
+    apiFetch(`/history?limit=100${type ? `&type=${type}` : ''}`)
       .then(data => {
         if (data && Array.isArray(data.history)) {
           setHistory(data.history);
@@ -1183,9 +1192,8 @@ const DashboardLayout = ({ children }) => {
         </div>
         <div className="sidebar-nav">
           <Link to="/dashboard" className={`nav-item ${location.pathname==='/dashboard'?'active':''}`}><LayoutDashboard size={18}/> Overview</Link>
-          <Link to="/dashboard/single" className={`nav-item ${location.pathname==='/dashboard/single'?'active':''}`}><Search size={18}/> Single Verify</Link>
-          <Link to="/dashboard/bulk" className={`nav-item ${location.pathname==='/dashboard/bulk'?'active':''}`}><List size={18}/> Bulk Verification</Link>
-          <Link to="/dashboard/csv" className={`nav-item ${location.pathname==='/dashboard/csv'?'active':''}`}><Upload size={18}/> Clean a List</Link>
+          <Link to="/dashboard/verify" className={`nav-item ${location.pathname==='/dashboard/verify'?'active':''}`}><CheckCircle size={18}/> Email Verification</Link>
+          <Link to="/dashboard/bounce" className={`nav-item ${location.pathname==='/dashboard/bounce'?'active':''}`}><AlertCircle size={18}/> Bounce Rate</Link>
           <Link to="/dashboard/tasks" className={`nav-item ${location.pathname==='/dashboard/tasks'?'active':''}`}><History size={18}/> Tasks &amp; Results</Link>
           <Link to="/dashboard/account" className={`nav-item ${location.pathname==='/dashboard/account'?'active':''}`}><User size={18}/> My Account</Link>
           {(user?.role === 'admin' || user?.role === 'superadmin') && (
@@ -1208,154 +1216,233 @@ const DashboardLayout = ({ children }) => {
   );
 };
 
-const SingleVerify = () => {
+// One unified verification page (Reoon-style): single email, paste-a-list, and
+// CSV/TXT upload — all in one place.
+const EmailVerification = () => {
+  const { refreshUser } = useAuth();
+  const [historyVersion, setHistoryVersion] = useState(0);
+  const [results, setResults] = useState([]);
+  const [resultsTitle, setResultsTitle] = useState('Results');
+  const [progress, setProgress] = useState(null);
+
   const [email, setEmail] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [historyVersion, setHistoryVersion] = useState(0);
-  const { refreshUser } = useAuth();
+  const [singleLoading, setSingleLoading] = useState(false);
 
-  const handleVerify = async (e) => {
-    e.preventDefault();
-    if(!email) return;
-    setLoading(true);
-    try {
-      const data = await apiFetch('/verify', { method: 'POST', body: JSON.stringify({ email }) });
-      if (data.error) throw new Error(data.error);
-      setResult(data);
-      await refreshUser();            // live, accurate credits
-      setHistoryVersion(v => v + 1);
-    } catch(err) { alert(err.message); }
-    setLoading(false);
-  };
+  const [bulkName, setBulkName] = useState('');
+  const [bulkText, setBulkText] = useState('');
+  const [bulkLoading, setBulkLoading] = useState(false);
 
-  return (
-    <div>
-      <div className="card" style={{padding:'2rem', maxWidth:'600px'}}>
-        <div className="page-title">Single Verification</div>
-        <form onSubmit={handleVerify} className="form-group">
-          <label>Email Address</label>
-          <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="input-field" placeholder="test@domain.com" required/>
-          <button type="submit" className="btn-primary" disabled={loading} style={{marginTop:'1rem'}}>
-            {loading ? <Loader2 className="loader" size={18}/> : <Search size={18}/>} Verify
-          </button>
-        </form>
-        {result && <ResultsTable results={[result]} />}
-      </div>
-      <HistoryPanel type="single" version={historyVersion} />
-    </div>
-  );
-};
-
-const BulkVerify = () => {
-  const [emails, setEmails] = useState('');
-  const [name, setName] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(null);
-  const [results, setResults] = useState([]);
-  const [historyVersion, setHistoryVersion] = useState(0);
-  const { refreshUser } = useAuth();
-
-  const handleVerify = async (e) => {
-    e.preventDefault();
-    const arr = emails.split('\n').map(e=>e.trim()).filter(e=>e);
-    if(arr.length === 0) return;
-    setLoading(true); setResults([]); setProgress({ processed: 0, total: arr.length });
-    try {
-      const job = await apiFetch('/verify/bulk', { method: 'POST', body: JSON.stringify({ emails: arr, name: name.trim() || undefined }) });
-      if (job.error) throw new Error(job.error);
-      const done = await pollJob(job.jobId, (p, t) => setProgress({ processed: p, total: t }));
-      const batch = await apiFetch(`/history/${done.batchId}`);
-      setResults((batch && batch.results) || []);
-      await refreshUser();            // live, accurate credits
-      setHistoryVersion(v => v + 1);
-    } catch(err) { alert(err.message); }
-    setProgress(null);
-    setLoading(false);
-  };
-
-  return (
-    <div>
-      <div className="card" style={{padding:'2rem'}}>
-        <div className="page-title">Bulk Verification</div>
-        <form onSubmit={handleVerify} className="form-group">
-          <label>Task Name <span style={{color:'var(--text-secondary)', fontWeight:400}}>(optional)</span></label>
-          <input type="text" value={name} onChange={e=>setName(e.target.value)} className="input-field" placeholder="e.g. Newsletter list — July" maxLength={120} />
-          <label style={{marginTop:'1rem'}}>Paste Emails (one per line)</label>
-          <textarea value={emails} onChange={e=>setEmails(e.target.value)} className="input-field" style={{minHeight:'200px'}} required/>
-          <button type="submit" className="btn-primary" disabled={loading} style={{marginTop:'1rem', width:'max-content'}}>
-            {loading ? <Loader2 className="loader" size={18}/> : <List size={18}/>} Verify List
-          </button>
-        </form>
-        {progress && <JobProgress processed={progress.processed} total={progress.total} />}
-        <ResultsTable results={results} />
-      </div>
-      <HistoryPanel type="bulk" version={historyVersion} />
-    </div>
-  );
-};
-
-const CsvVerify = () => {
+  const [csvName, setCsvName] = useState('');
   const [file, setFile] = useState(null);
-  const [name, setName] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(null);
-  const [results, setResults] = useState([]);
-  const [historyVersion, setHistoryVersion] = useState(0);
-  const { refreshUser } = useAuth();
-  const fileInputRef = React.useRef(null);
+  const [csvLoading, setCsvLoading] = useState(false);
+  const fileInputRef = useRef(null);
 
-  const handleUpload = async () => {
-    if(!file) return;
-    const formData = new FormData();
-    formData.append('file', file);
-    if (name.trim()) formData.append('name', name.trim());
-    setLoading(true); setResults([]); setProgress({ processed: 0, total: 0 });
+  const verifySingle = async (e) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setSingleLoading(true); setProgress(null);
     try {
-      const job = await apiFetch('/verify/csv', { method: 'POST', body: formData });
+      const data = await apiFetch('/verify', { method: 'POST', body: JSON.stringify({ email: email.trim() }) });
+      if (data.error) throw new Error(data.error);
+      setResults([data]); setResultsTitle('Single result');
+      await refreshUser(); setHistoryVersion(v => v + 1);
+    } catch (err) { alert(err.message); }
+    setSingleLoading(false);
+  };
+
+  // Shared runner for the two background-job flows (bulk / CSV).
+  const runJob = async (submit, total, setLoading, title) => {
+    setLoading(true); setResults([]); setProgress({ processed: 0, total });
+    try {
+      const job = await submit();
       if (job.error) throw new Error(job.error);
       setProgress({ processed: 0, total: job.total });
       const done = await pollJob(job.jobId, (p, t) => setProgress({ processed: p, total: t }));
-      const batch = await apiFetch(`/history/${done.batchId}`);
-      setResults((batch && batch.results) || []);
-      await refreshUser();            // live, accurate credits
-      setFile(null);
-      setHistoryVersion(v => v + 1);
-    } catch(err) { alert(err.message); }
-    setProgress(null);
-    setLoading(false);
+      let out = done.results;
+      if (!out && done.batchId) { const b = await apiFetch(`/history/${done.batchId}`); out = (b && b.results) || []; }
+      setResults(out || []); setResultsTitle(title);
+      await refreshUser(); setHistoryVersion(v => v + 1);
+    } catch (err) { alert(err.message); }
+    setProgress(null); setLoading(false);
+    return true;
+  };
+
+  const verifyBulk = (e) => {
+    e.preventDefault();
+    const arr = bulkText.split('\n').map(s => s.trim()).filter(Boolean);
+    if (!arr.length) return;
+    runJob(
+      () => apiFetch('/verify/bulk', { method: 'POST', body: JSON.stringify({ emails: arr, name: bulkName.trim() || undefined }) }),
+      arr.length, setBulkLoading, 'Bulk results'
+    );
+  };
+
+  const verifyCsv = () => {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    if (csvName.trim()) fd.append('name', csvName.trim());
+    runJob(() => apiFetch('/verify/csv', { method: 'POST', body: fd }), 0, setCsvLoading, 'File results')
+      .then(() => setFile(null));
   };
 
   return (
     <div>
-      <div className="card" style={{padding:'2rem'}}>
-        <div className="page-title">Clean a List (CSV)</div>
-        <div className="form-group" style={{marginBottom:'1.25rem'}}>
-          <label>Task Name <span style={{color:'var(--text-secondary)', fontWeight:400}}>(optional)</span></label>
-          <input type="text" value={name} onChange={e=>setName(e.target.value)} className="input-field" placeholder="e.g. CRM export — Q3" maxLength={120} />
+      <div className="page-title">Email Verification</div>
+      <p className="muted" style={{ marginTop: '-0.5rem', marginBottom: '1.5rem' }}>
+        Verify a single address, paste a list, or upload a file — all in one place.
+      </p>
+
+      {/* Single email */}
+      <div className="card verify-single-card">
+        <form onSubmit={verifySingle}>
+          <label>Verify a single email</label>
+          <div className="verify-single-row">
+            <input type="email" className="input-field" placeholder="name@example.com" value={email} onChange={e => setEmail(e.target.value)} />
+            <button type="submit" className="btn-primary" disabled={singleLoading}>
+              {singleLoading ? <Loader2 className="loader" size={18} /> : <Search size={18} />} Verify
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* Bulk paste + file upload */}
+      <div className="verify-grid">
+        <div className="card">
+          <div className="verify-opt-title"><List size={17} /> Paste a list</div>
+          <form onSubmit={verifyBulk} className="form-group">
+            <label>Task Name <span className="muted-inline">(optional)</span></label>
+            <input type="text" className="input-field" value={bulkName} onChange={e => setBulkName(e.target.value)} placeholder="e.g. Newsletter — July" maxLength={120} />
+            <label style={{ marginTop: '0.9rem' }}>Email addresses (one per line)</label>
+            <textarea className="input-field" style={{ minHeight: '170px' }} value={bulkText} onChange={e => setBulkText(e.target.value)} placeholder={"one@example.com\ntwo@example.com"} />
+            <button type="submit" className="btn-primary" disabled={bulkLoading} style={{ marginTop: '1rem' }}>
+              {bulkLoading ? <Loader2 className="loader" size={18} /> : <List size={18} />} Start Verification
+            </button>
+          </form>
         </div>
+
+        <div className="card">
+          <div className="verify-opt-title"><Upload size={17} /> Upload a file</div>
+          <div className="form-group">
+            <label>Task Name <span className="muted-inline">(optional)</span></label>
+            <input type="text" className="input-field" value={csvName} onChange={e => setCsvName(e.target.value)} placeholder="e.g. CRM export — Q3" maxLength={120} />
+          </div>
+          <div
+            className="upload-area"
+            onClick={() => fileInputRef.current.click()}
+            onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }}
+            onDragLeave={(e) => e.currentTarget.classList.remove('drag-over')}
+            onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove('drag-over'); if (e.dataTransfer.files && e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); }}
+          >
+            <input type="file" accept=".csv,.txt" ref={fileInputRef} onChange={e => setFile(e.target.files[0])} style={{ display: 'none' }} />
+            <Upload size={40} color="var(--accent-color)" />
+            <p style={{ fontWeight: 500, margin: '0.5rem 0 0.25rem' }}>{file ? file.name : 'Drag & drop, or click to browse'}</p>
+            <span className="muted-inline">CSV (any columns) or TXT (one email per line)</span>
+          </div>
+          <button onClick={verifyCsv} className="btn-primary" disabled={!file || csvLoading} style={{ marginTop: '1rem' }}>
+            {csvLoading ? <Loader2 className="loader" size={18} /> : <Upload size={18} />} Start Verification
+          </button>
+        </div>
+      </div>
+
+      {progress && <JobProgress processed={progress.processed} total={progress.total} />}
+      {results.length > 0 && <ResultsTable results={results} title={resultsTitle} />}
+
+      <HistoryPanel version={historyVersion} />
+    </div>
+  );
+};
+
+// Upload any file → get the estimated bounce rate and a deliverability breakdown.
+const BounceChecker = () => {
+  const { refreshUser } = useAuth();
+  const [file, setFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [results, setResults] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const run = async () => {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    setLoading(true); setResults(null); setProgress({ processed: 0, total: 0 });
+    try {
+      const job = await apiFetch('/verify/csv', { method: 'POST', body: fd });
+      if (job.error) throw new Error(job.error);
+      setProgress({ processed: 0, total: job.total });
+      const done = await pollJob(job.jobId, (p, t) => setProgress({ processed: p, total: t }));
+      let out = done.results;
+      if (!out && done.batchId) { const b = await apiFetch(`/history/${done.batchId}`); out = (b && b.results) || []; }
+      setResults(out || []);
+      await refreshUser();
+    } catch (err) { alert(friendlyError(err)); }
+    setProgress(null); setLoading(false);
+  };
+
+  const summary = React.useMemo(() => {
+    if (!results) return null;
+    const s = { total: results.length, valid: 0, invalid: 0, catchAll: 0, unknown: 0 };
+    for (const r of results) {
+      if (r.status === 'valid') s.valid++;
+      else if (r.status === 'invalid') s.invalid++;
+      else if (r.status === 'catch-all') s.catchAll++;
+      else s.unknown++;
+    }
+    const pct = (n) => s.total ? Math.round((n / s.total) * 100) : 0;
+    return { ...s, bounceRate: pct(s.invalid), deliverable: pct(s.valid), risky: pct(s.catchAll + s.unknown) };
+  }, [results]);
+
+  const bounceColor = summary ? (summary.bounceRate <= 3 ? '#059669' : summary.bounceRate <= 10 ? '#d97706' : '#dc2626') : '#64748b';
+
+  return (
+    <div>
+      <div className="page-title">Bounce Rate Checker</div>
+      <p className="muted" style={{ marginTop: '-0.5rem', marginBottom: '1.5rem' }}>
+        Upload any list (CSV or TXT) and get its estimated bounce rate and deliverability breakdown.
+      </p>
+
+      <div className="card" style={{ padding: '1.75rem', maxWidth: 640 }}>
         <div
           className="upload-area"
           onClick={() => fileInputRef.current.click()}
           onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }}
           onDragLeave={(e) => e.currentTarget.classList.remove('drag-over')}
-          onDrop={(e) => {
-            e.preventDefault();
-            e.currentTarget.classList.remove('drag-over');
-            if (e.dataTransfer.files && e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
-          }}
+          onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove('drag-over'); if (e.dataTransfer.files && e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); }}
         >
-          <input type="file" accept=".csv" ref={fileInputRef} onChange={e=>setFile(e.target.files[0])} style={{ display: 'none' }} />
-          <Upload size={48} color="var(--accent-color)" />
-          <p style={{fontSize:'1.2rem', fontWeight:500}}>{file ? file.name : "Drag & Drop your CSV list here, or click to browse"}</p>
+          <input type="file" accept=".csv,.txt" ref={fileInputRef} onChange={e => setFile(e.target.files[0])} style={{ display: 'none' }} />
+          <Upload size={40} color="var(--accent-color)" />
+          <p style={{ fontWeight: 500, margin: '0.5rem 0 0.25rem' }}>{file ? file.name : 'Drag & drop, or click to browse'}</p>
+          <span className="muted-inline">CSV (any columns) or TXT (one email per line)</span>
         </div>
-        <button onClick={handleUpload} className="btn-primary" disabled={!file || loading} style={{marginTop:'1.5rem', width:'max-content'}}>
-          {loading ? <Loader2 className="loader" size={18}/> : <Upload size={18}/>} Process CSV List
+        <button onClick={run} className="btn-primary" disabled={!file || loading} style={{ marginTop: '1rem' }}>
+          {loading ? <Loader2 className="loader" size={18} /> : <AlertCircle size={18} />} Check Bounce Rate
         </button>
         {progress && <JobProgress processed={progress.processed} total={progress.total} />}
-        <ResultsTable results={results} />
       </div>
-      <HistoryPanel type="csv" version={historyVersion} />
+
+      {summary && (
+        <div className="card bounce-hero" style={{ marginTop: '1.5rem' }}>
+          <div className="bounce-main">
+            <div className="bounce-pct" style={{ color: bounceColor }}>{summary.bounceRate}%</div>
+            <div className="bounce-label">Estimated bounce rate<br /><span className="muted-inline">{summary.invalid.toLocaleString()} of {summary.total.toLocaleString()} will bounce</span></div>
+          </div>
+          <div className="bounce-stats">
+            <div><span className="dot" style={{ background: '#059669' }} /> Deliverable (valid): <strong>{summary.deliverable}%</strong></div>
+            <div><span className="dot" style={{ background: '#d97706' }} /> Risky (catch-all/unknown): <strong>{summary.risky}%</strong></div>
+            <div><span className="dot" style={{ background: '#dc2626' }} /> Undeliverable (invalid): <strong>{summary.bounceRate}%</strong></div>
+          </div>
+          <div className="pill-row" style={{ marginTop: '1rem' }}>
+            <CountPill label="Valid" value={summary.valid} cls="valid" />
+            <CountPill label="Invalid" value={summary.invalid} cls="invalid" />
+            <CountPill label="Catch-all" value={summary.catchAll} cls="catch-all" />
+            <CountPill label="Unknown" value={summary.unknown} cls="unknown" />
+            <button className="btn-secondary" style={{ marginLeft: 'auto' }} onClick={() => downloadCSV(results, 'bounce_check.csv')}>
+              <Download size={15} /> Download full results
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1776,6 +1863,7 @@ const PAGE_SIZE = 10;
 const TasksResults = () => {
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [filter, setFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState(null);
@@ -1785,15 +1873,17 @@ const TasksResults = () => {
   const getResults = useBatchResults();
 
   const load = () => {
-    setLoading(true);
+    setLoading(true); setLoadError('');
     apiFetch('/history?limit=500')
       .then(data => {
         if (data && Array.isArray(data.history)) {
           setBatches(data.history);
           if (data.retentionDays) setRetentionDays(data.retentionDays);
+        } else {
+          setLoadError('Unexpected response from the server.');
         }
       })
-      .catch(() => {})
+      .catch(err => setLoadError(friendlyError(err)))
       .finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
@@ -1839,6 +1929,13 @@ const TasksResults = () => {
 
         {loading && batches.length === 0 ? (
           <div className="history-empty"><Loader2 className="loader" size={18}/> Loading…</div>
+        ) : loadError ? (
+          <div className="history-empty" style={{color:'#dc2626'}}>
+            <AlertCircle size={18}/> Couldn’t load history: {loadError}
+            <div style={{marginTop:'0.5rem', fontSize:'0.85rem', color:'var(--text-secondary)'}}>
+              If this says an unexpected response, your server’s nginx must proxy <code>/history</code> to the backend.
+            </div>
+          </div>
         ) : filtered.length === 0 ? (
           <div className="history-empty">No verification tasks yet. Run a check from <strong>Email Verification</strong>.</div>
         ) : (
@@ -2044,9 +2141,12 @@ function AppRoutes() {
       <Route path="/cookies" element={<CookiePolicy />} />
       <Route path="/gdpr" element={<GDPR />} />
       <Route path="/dashboard" element={<ProtectedRoute><DashboardHome /></ProtectedRoute>} />
-      <Route path="/dashboard/single" element={<ProtectedRoute><SingleVerify /></ProtectedRoute>} />
-      <Route path="/dashboard/bulk" element={<ProtectedRoute><BulkVerify /></ProtectedRoute>} />
-      <Route path="/dashboard/csv" element={<ProtectedRoute><CsvVerify /></ProtectedRoute>} />
+      <Route path="/dashboard/verify" element={<ProtectedRoute><EmailVerification /></ProtectedRoute>} />
+      <Route path="/dashboard/bounce" element={<ProtectedRoute><BounceChecker /></ProtectedRoute>} />
+      {/* Old separate routes now redirect to the unified page */}
+      <Route path="/dashboard/single" element={<Navigate to="/dashboard/verify" replace />} />
+      <Route path="/dashboard/bulk" element={<Navigate to="/dashboard/verify" replace />} />
+      <Route path="/dashboard/csv" element={<Navigate to="/dashboard/verify" replace />} />
       <Route path="/dashboard/tasks" element={<ProtectedRoute><TasksResults /></ProtectedRoute>} />
       <Route path="/dashboard/account" element={<ProtectedRoute><MyAccount /></ProtectedRoute>} />
       <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPanel /></ProtectedRoute>} />

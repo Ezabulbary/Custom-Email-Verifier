@@ -14,7 +14,7 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const crypto = require('crypto');
-const { parse } = require('csv-parse');
+const { parse: parseCsvSync } = require('csv-parse/sync');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -35,10 +35,11 @@ const upload = multer({
     dest: 'uploads/',
     limits: { fileSize: 15 * 1024 * 1024, files: 1 },
     fileFilter: (req, file, cb) => {
-        const isCsv = file.mimetype === 'text/csv'
+        const ok = file.mimetype === 'text/csv'
             || file.mimetype === 'application/vnd.ms-excel'
-            || /\.csv$/i.test(file.originalname);
-        cb(isCsv ? null : new Error('Only CSV files are allowed'), isCsv);
+            || file.mimetype === 'text/plain'
+            || /\.(csv|txt)$/i.test(file.originalname);
+        cb(ok ? null : new Error('Only CSV or TXT files are allowed'), ok);
     }
 });
 
@@ -79,8 +80,39 @@ fetchDomains().then(() => {
     console.log('Disposable domains loaded. Ready to verify.');
 });
 
+// --- Diagnostic: outbound port 25 ---
+// Real SMTP mailbox verification REQUIRES outbound TCP port 25. Most cloud/VPS
+// hosts block it by default, which makes most results come back "unknown" and
+// tanks accuracy. Probe it at startup and warn loudly so this isn't a mystery.
+let port25Open = null; // null = unknown/checking, true/false once probed
+(function checkPort25() {
+    const net = require('net');
+    const s = new net.Socket();
+    let done = false;
+    const finish = (open, why) => {
+        if (done) return; done = true; s.destroy();
+        port25Open = open;
+        if (open) {
+            console.log('[Diag] Outbound port 25 is OPEN — SMTP mailbox verification is available.');
+        } else {
+            console.warn('==================================================================');
+            console.warn(`[Diag] Outbound port 25 appears BLOCKED (${why}).`);
+            console.warn('       SMTP mailbox checks cannot run, so most results will be');
+            console.warn('       "unknown" and accuracy will be LOW (this is the #1 cause of');
+            console.warn('       poor results). Fixes: ask your host to unblock port 25, run');
+            console.warn('       on a host that allows it, or plug in a verification API.');
+            console.warn('       See ACCURACY.md.');
+            console.warn('==================================================================');
+        }
+    };
+    s.setTimeout(8000, () => finish(false, 'timeout'));
+    s.on('error', (e) => finish(false, e.code || e.message));
+    try { s.connect(25, 'gmail-smtp-in.l.google.com', () => finish(true)); }
+    catch (e) { finish(false, e.message); }
+})();
+
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', store: store.backend });
+    res.json({ status: 'ok', store: store.backend, port25: port25Open });
 });
 
 // --- Auth Endpoints ---
@@ -383,7 +415,9 @@ async function saveBatch(userId, type, results, name) {
     try {
         return await store.createBatch(userId, { type, name, results });
     } catch (err) {
-        console.error('Failed to save batch:', err.message);
+        // Loud, actionable log — if batches aren't showing in Tasks & Results,
+        // the reason (e.g. a Firestore permission/quota error) shows up here.
+        console.error(`[History] FAILED to save ${type} batch for user ${userId}:`, (err && err.stack) || err);
         return null;
     }
 }
@@ -460,7 +494,13 @@ async function runJob(job) {
     try {
         job.results = await asyncPoolProgress(
             VERIFY_CONCURRENCY, job.emails,
-            (email) => verifyEmail(email),
+            async (email, i) => {
+                const r = await verifyEmail(email);
+                // Attach the original CSV row (all its columns) so the download
+                // can include every source column alongside the verdict.
+                if (job.sources && job.sources[i]) r.source = job.sources[i];
+                return r;
+            },
             () => { job.processed++; }
         );
         // Charge only for emails that were successfully checked.
@@ -480,7 +520,7 @@ async function runJob(job) {
     setTimeout(() => jobs.delete(job.id), 10 * 60 * 1000);
 }
 
-async function startVerificationJob(req, res, type, emails, name) {
+async function startVerificationJob(req, res, type, emails, name, sources) {
     const user = await store.getUserById(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
     // Require enough credits for the whole list up front (only successful checks
@@ -490,7 +530,7 @@ async function startVerificationJob(req, res, type, emails, name) {
     }
     const job = {
         id: makeJobId(), userId: req.user.id, type, name,
-        emails, total: emails.length, processed: 0,
+        emails, sources: sources || null, total: emails.length, processed: 0,
         results: null, status: 'processing', createdAt: Date.now(),
     };
     jobs.set(job.id, job);
@@ -513,35 +553,93 @@ app.post('/verify/bulk', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/verify/csv', authenticateToken, upload.single('file'), (req, res) => {
+// Parse an uploaded CSV/TXT into { emails, sources } — KEEPING every original
+// column. Robust to header name, column position, delimiter, BOM, quoting, and
+// whether there's a header row at all: the email is found by VALUE. `sources[i]`
+// is the full original row (as an object keyed by header) for emails[i], so the
+// downloaded results can include all original columns + the verdict.
+const CSV_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function parseCsvRows(buf) {
+    const content = buf.toString('utf8').replace(/^﻿/, ''); // strip BOM
+    const firstLine = content.split(/\r?\n/).find(l => l.trim()) || '';
+    const occ = (ch) => firstLine.split(ch).length - 1;
+    const delimiter = occ('\t') > occ(',') && occ('\t') > occ(';') ? '\t'
+        : occ(';') > occ(',') ? ';' : ',';
+
+    let records;
+    try {
+        records = parseCsvSync(content, {
+            columns: false, skip_empty_lines: true, relax_column_count: true,
+            relax_quotes: true, delimiter, trim: true,
+        });
+    } catch {
+        records = content.split(/\r?\n/).filter(l => l.trim()).map(l => [l]);
+    }
+    if (!records.length) return { emails: [], sources: [] };
+
+    const width = Math.max(...records.map(r => r.length));
+    const rowHasEmail = (r) => r.some(c => CSV_EMAIL_RE.test(String(c || '').trim()));
+
+    // Header row = a first row that has NO email while later rows do.
+    let headerRow = null, dataStart = 0;
+    if (!rowHasEmail(records[0]) && records.slice(1, 6).some(rowHasEmail)) {
+        headerRow = records[0]; dataStart = 1;
+    }
+    const headers = [];
+    for (let c = 0; c < width; c++) {
+        const h = headerRow && headerRow[c] != null ? String(headerRow[c]).trim() : '';
+        headers.push(h || `Column ${c + 1}`);
+    }
+
+    // Which column holds emails (scan sample values).
+    let emailCol = -1;
+    const sample = records.slice(dataStart, dataStart + 25);
+    for (let c = 0; c < width; c++) {
+        if (sample.some(r => CSV_EMAIL_RE.test(String(r[c] || '').trim()))) { emailCol = c; break; }
+    }
+
+    const emails = [], sources = [], seen = new Set();
+    for (let i = dataStart; i < records.length; i++) {
+        const r = records[i];
+        let email = emailCol >= 0 ? String(r[emailCol] || '').trim() : '';
+        if (!CSV_EMAIL_RE.test(email)) {
+            const found = r.find(c => CSV_EMAIL_RE.test(String(c || '').trim()));
+            email = found ? String(found).trim() : '';
+        }
+        if (!CSV_EMAIL_RE.test(email)) continue;
+        const key = email.toLowerCase();
+        if (seen.has(key)) continue;      // de-duplicate
+        seen.add(key);
+        const source = {};
+        for (let c = 0; c < width; c++) source[headers[c]] = r[c] != null ? String(r[c]) : '';
+        emails.push(key);
+        sources.push(source);
+    }
+    return { emails, sources };
+}
+
+app.post('/verify/csv', authenticateToken, upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
     const name = (req.body.name || '').toString().slice(0, 120) || null;
 
-    const emails = [];
-    fs.createReadStream(req.file.path)
-        .pipe(parse({ columns: true, skip_empty_lines: true }))
-        .on('data', (row) => {
-            const emailKey = Object.keys(row).find(k => k.toLowerCase().includes('email')) || Object.keys(row)[0];
-            if (emailKey && row[emailKey]) {
-                emails.push(String(row[emailKey]).trim());
-            }
-        })
-        .on('end', async () => {
-            fs.unlink(req.file.path, () => {});
-            if (emails.length === 0) {
-                return res.status(400).json({ error: 'No emails found in CSV' });
-            }
-            try {
-                await startVerificationJob(req, res, 'csv', emails, name);
-            } catch (err) {
-                console.error('CSV verify error:', err.message);
-                res.status(500).json({ error: 'CSV verification failed' });
-            }
-        })
-        .on('error', (err) => {
-            fs.unlink(req.file.path, () => {});
-            res.status(500).json({ error: 'Failed to parse CSV' });
-        });
+    let parsed = { emails: [], sources: [] };
+    try {
+        parsed = parseCsvRows(fs.readFileSync(req.file.path));
+    } catch (e) {
+        console.error('CSV parse error:', e.message);
+    } finally {
+        fs.unlink(req.file.path, () => {});
+    }
+
+    if (parsed.emails.length === 0) {
+        return res.status(400).json({ error: 'No email addresses found in the file. Make sure it has an email column, or one email per line.' });
+    }
+    try {
+        await startVerificationJob(req, res, 'csv', parsed.emails, name, parsed.sources);
+    } catch (err) {
+        console.error('CSV verify error:', err.message);
+        res.status(500).json({ error: 'CSV verification failed' });
+    }
 });
 
 // Poll the progress of a background bulk/CSV job.
@@ -554,6 +652,9 @@ app.get('/verify/status/:jobId', authenticateToken, (req, res) => {
         status: job.status, processed: job.processed, total: job.total,
         batchId: job.batchId, batchNumber: job.batchNumber,
         charged: job.charged, error: job.error,
+        // Include the results in the final response so the client doesn't need a
+        // separate /history fetch to show them.
+        results: job.status === 'completed' ? job.results : undefined,
     });
 });
 
@@ -711,7 +812,7 @@ app.delete('/admin/users/:id', authenticateToken, requireAdmin, async (req, res)
 // Error handler — turns upload/multer and other errors into clean JSON responses
 // instead of leaking stack traces via the default HTML error page.
 app.use((err, req, res, next) => {
-    if (err instanceof multer.MulterError || err.message === 'Only CSV files are allowed') {
+    if (err instanceof multer.MulterError || err.message === 'Only CSV or TXT files are allowed') {
         return res.status(400).json({ error: err.message });
     }
     console.error('Unhandled error:', err.message);
