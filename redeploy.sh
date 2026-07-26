@@ -31,7 +31,9 @@ else
 fi
 
 echo "==> [5/5] Configuring Nginx to proxy all requests to backend"
-cat << 'EOF' | sudo tee /etc/nginx/sites-available/email-verifier > /dev/null
+sudo rm -f /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf 2>/dev/null || true
+
+cat << 'EOF' | sudo tee /etc/nginx/sites-available/default > /dev/null
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
@@ -53,8 +55,7 @@ server {
 }
 EOF
 
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo ln -sf /etc/nginx/sites-available/email-verifier /etc/nginx/sites-enabled/email-verifier
+sudo ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl restart nginx
 
 echo "==> Done. Checking backend status:"
