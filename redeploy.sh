@@ -30,10 +30,31 @@ else
   pm2 save
 fi
 
-echo "==> [5/5] Checking and reloading nginx"
-if [ -f /etc/nginx/sites-available/email-verifier ]; then
-  sed -i 's/location ~ \^\/(auth|verify|health)/location ~ \^\/(auth|verify|history|admin|health)/g' /etc/nginx/sites-available/email-verifier /etc/nginx/sites-enabled/email-verifier 2>/dev/null || true
-fi
+echo "==> [5/5] Configuring Nginx to proxy all requests to backend"
+cat << 'EOF' | sudo tee /etc/nginx/sites-available/email-verifier > /dev/null
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    client_max_body_size 50m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+EOF
+
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo ln -sf /etc/nginx/sites-available/email-verifier /etc/nginx/sites-enabled/email-verifier
 sudo nginx -t && sudo systemctl restart nginx
 
 echo "==> Done. Checking backend status:"
