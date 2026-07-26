@@ -809,6 +809,25 @@ app.delete('/admin/users/:id', authenticateToken, requireAdmin, async (req, res)
     }
 });
 
+// --- Serve the built frontend (optional; makes the app self-contained) ---
+// If frontend/dist exists, this one server handles BOTH the API and the web app.
+// Then your reverse proxy only needs to forward everything to this process — no
+// per-path proxy rules to maintain (a missing /history or /admin rule is exactly
+// what makes Tasks & Results fail with "unexpected response HTTP 200"). The API
+// routes above always take precedence; anything else falls back to index.html.
+const API_PREFIX_RE = /^\/(auth|verify|history|admin|health)(\/|$)/;
+const DIST_DIR = require('path').join(__dirname, 'frontend', 'dist');
+if (fs.existsSync(DIST_DIR)) {
+    app.use(express.static(DIST_DIR));
+    app.use((req, res, next) => {
+        if (req.method !== 'GET' || API_PREFIX_RE.test(req.path)) return next();
+        res.sendFile(require('path').join(DIST_DIR, 'index.html'));
+    });
+    console.log('[Web] Serving frontend from frontend/dist — you can proxy everything to this port.');
+} else {
+    console.log('[Web] frontend/dist not found — running API-only (serve the frontend separately).');
+}
+
 // Error handler — turns upload/multer and other errors into clean JSON responses
 // instead of leaking stack traces via the default HTML error page.
 app.use((err, req, res, next) => {
