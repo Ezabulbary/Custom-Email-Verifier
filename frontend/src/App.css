@@ -928,3 +928,25 @@
 .bounce-stats > div { display: flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); font-size: 0.95rem; }
 .bounce-stats strong { color: var(--text-primary); }
 .bounce-stats .dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+/* --- Profile: password fields with lock + eye --- */
+.pw-field { position: relative; display: flex; align-items: center; }
+.pw-field .input-field { padding-left: 2.3rem; padding-right: 2.5rem; width: 100%; }
+.pw-lock { position: absolute; left: 0.75rem; color: var(--text-secondary); pointer-events: none; }
+.pw-eye { position: absolute; right: 0.5rem; background: transparent; border: none; color: var(--text-secondary); cursor: pointer; padding: 0.35rem; display: flex; border-radius: 6px; }
+.pw-eye:hover { color: var(--text-primary); background: #f1f5f9; }
+
+/* --- Profile: address layout --- */
+.addr-row1 { display: grid; grid-template-columns: 2fr 1fr; gap: 0 1rem; }
+
+/* --- Profile: 2FA --- */
+.twofa-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.9rem 0; border-top: 1px solid var(--border-color); }
+.twofa-row:first-of-type { border-top: none; }
+.twofa-info { display: flex; align-items: center; gap: 0.6rem; color: var(--text-primary); }
+.twofa-info strong { font-size: 0.95rem; }
+.twofa-status { font-size: 0.82rem; color: var(--text-secondary); margin-top: 2px; }
+
+@media (max-width: 900px) {
+  .addr-row1 { grid-template-columns: 1fr; }
+}
+select.input-field { appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%2364748b' stroke-width='2'><path d='M4 6l4 4 4-4'/></svg>"); background-repeat: no-repeat; background-position: right 0.75rem center; padding-right: 2rem; }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
-import { List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Star, Quote, Phone, User } from 'lucide-react';
+import { List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Star, Quote, Phone, User, Lock, Eye, EyeOff, Smartphone } from 'lucide-react';
 import './App.css';
 import { googleSignIn } from './firebase';
 
@@ -1544,6 +1544,24 @@ const DashboardHome = () => {
 
 const ACCOUNT_ROLE_LABELS = { user: 'User', admin: 'Admin', superadmin: 'Super Admin' };
 const EMPTY_PROFILE = { firstName: '', lastName: '', phone: '', address: '', city: '', zip: '', country: '', state: '' };
+const COUNTRIES = ['Bangladesh','India','Pakistan','Nepal','Sri Lanka','United States','United Kingdom','Canada','Australia','Germany','France','Italy','Spain','Netherlands','Sweden','Norway','Denmark','Ireland','Switzerland','Austria','Belgium','Portugal','Poland','Russia','Ukraine','Turkey','United Arab Emirates','Saudi Arabia','Qatar','Kuwait','Malaysia','Singapore','Indonesia','Thailand','Vietnam','Philippines','China','Japan','South Korea','Hong Kong','Brazil','Mexico','Argentina','South Africa','Nigeria','Kenya','Egypt','New Zealand'];
+
+// A labelled input with a leading lock icon and a show/hide (eye) toggle.
+const PasswordInput = ({ label, value, onChange, placeholder }) => {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="field">
+      <label>{label}</label>
+      <div className="pw-field">
+        <Lock size={15} className="pw-lock" />
+        <input type={show ? 'text' : 'password'} className="input-field" value={value} onChange={onChange} placeholder={placeholder} />
+        <button type="button" className="pw-eye" onClick={() => setShow(s => !s)} tabIndex={-1} aria-label={show ? 'Hide' : 'Show'}>
+          {show ? <EyeOff size={16} /> : <Eye size={16} />}
+        </button>
+      </div>
+    </div>
+  );
+};
 
 const MyAccount = () => {
   const { user, setUser, refreshUser } = useAuth();
@@ -1631,13 +1649,20 @@ const MyAccount = () => {
 
             <h3 style={{fontSize:'1.15rem', marginTop:'1.5rem'}}>My Address</h3>
             <p className="muted">Where we can reach you if needed</p>
-            <div className="field"><label>Address</label><input className="input-field" value={form.address} onChange={set('address')} placeholder="Street address" /></div>
-            <div className="three-col">
+            <div className="addr-row1">
+              <div className="field"><label>Address</label><input className="input-field" value={form.address} onChange={set('address')} placeholder="Street address" /></div>
               <div className="field"><label>City</label><input className="input-field" value={form.city} onChange={set('city')} /></div>
-              <div className="field"><label>ZIP</label><input className="input-field" value={form.zip} onChange={set('zip')} /></div>
-              <div className="field"><label>Country</label><input className="input-field" value={form.country} onChange={set('country')} /></div>
             </div>
-            <div className="field"><label>State</label><input className="input-field" value={form.state} onChange={set('state')} /></div>
+            <div className="three-col">
+              <div className="field"><label>ZIP</label><input className="input-field" value={form.zip} onChange={set('zip')} /></div>
+              <div className="field"><label>Country</label>
+                <select className="input-field" value={form.country} onChange={set('country')}>
+                  <option value="">Select country</option>
+                  {(COUNTRIES.includes(form.country) || !form.country ? COUNTRIES : [form.country, ...COUNTRIES]).map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div className="field"><label>State</label><input className="input-field" value={form.state} onChange={set('state')} placeholder="State / region" /></div>
+            </div>
 
             <div className="save-row">
               {savedMsg && <span className="save-ok"><CheckCircle2 size={16}/> {savedMsg}</span>}
@@ -1648,24 +1673,34 @@ const MyAccount = () => {
           </form>
         </div>
 
-        {/* Password + usage */}
+        {/* Password + 2FA */}
         <div className="profile-side">
           <div className="card" style={{padding:'2rem'}}>
             <h3 style={{fontSize:'1.15rem'}}>Update Account Password</h3>
             {pwErr && <div className="auth-error" style={{marginTop:'0.75rem'}}><AlertCircle size={16}/> {pwErr}</div>}
             {pwMsg && <div className="auth-success" style={{marginTop:'0.75rem'}}><CheckCircle2 size={18} color="#059669"/> <div>{pwMsg}</div></div>}
-            <form onSubmit={changePassword} className="form-group" style={{marginTop:'1rem'}}>
-              <label>Current Password</label>
-              <input type="password" className="input-field" value={pw.current} onChange={e=>setPw(p=>({...p, current:e.target.value}))} placeholder="Current password" />
-              <label>New Password</label>
-              <input type="password" className="input-field" value={pw.next} onChange={e=>setPw(p=>({...p, next:e.target.value}))} placeholder="At least 8 characters" />
-              <label>Confirm New Password</label>
-              <input type="password" className="input-field" value={pw.confirm} onChange={e=>setPw(p=>({...p, confirm:e.target.value}))} placeholder="Confirm new password" />
-              <button type="submit" className="btn-primary" style={{marginTop:'1rem'}} disabled={pwSaving}>
+            <form onSubmit={changePassword} style={{marginTop:'1rem'}}>
+              <PasswordInput label="Current Password" value={pw.current} onChange={e=>setPw(p=>({...p, current:e.target.value}))} placeholder="Current password" />
+              <PasswordInput label="New Password" value={pw.next} onChange={e=>setPw(p=>({...p, next:e.target.value}))} placeholder="At least 8 characters" />
+              <PasswordInput label="Confirm New Password" value={pw.confirm} onChange={e=>setPw(p=>({...p, confirm:e.target.value}))} placeholder="Confirm new password" />
+              <button type="submit" className="btn-primary" style={{marginTop:'0.5rem'}} disabled={pwSaving}>
                 {pwSaving ? <Loader2 className="loader" size={16}/> : null} Update Password
               </button>
             </form>
             <p className="muted" style={{marginTop:'0.75rem', fontSize:'0.8rem'}}>Signed up with Google? You can set a password here without a current one.</p>
+          </div>
+
+          <div className="card" style={{padding:'2rem', marginTop:'1.5rem'}}>
+            <h3 style={{fontSize:'1.15rem'}}>Two-Factor Authentication (2FA)</h3>
+            <div className="twofa-row">
+              <div className="twofa-info"><Smartphone size={16}/> <div><strong>Authenticator App (TOTP)</strong><div className="twofa-status">Status: <span className="badge unknown">Disabled</span></div></div></div>
+              <button className="btn-secondary" onClick={() => alert('Two-factor authentication is coming soon.')}>Enable Now</button>
+            </div>
+            <div className="twofa-row">
+              <div className="twofa-info"><MailCheck size={16}/> <div><strong>Email 2FA Authentication</strong><div className="twofa-status">Status: <span className="badge unknown">Disabled</span></div></div></div>
+              <button className="btn-secondary" onClick={() => alert('Two-factor authentication is coming soon.')}>Enable Now</button>
+            </div>
+            <p className="muted" style={{marginTop:'0.5rem', fontSize:'0.8rem'}}>2FA is coming soon.</p>
           </div>
 
           <div className="card" style={{padding:'2rem', marginTop:'1.5rem'}}>
