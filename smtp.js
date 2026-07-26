@@ -1,9 +1,15 @@
 const net = require('net');
 
 const SMTP_PORT = 25;
-const TIMEOUT_MS = 10000; 
-// The domain for MAIL FROM should ideally have a valid SPF record
-const PROBE_DOMAIN = 'verify.example.com'; 
+const TIMEOUT_MS = Number(process.env.SMTP_TIMEOUT_MS) || 12000;
+
+// IMPORTANT for accuracy: mail servers (Gmail, Outlook, …) judge the connecting
+// server by its HELO name and MAIL FROM. A fake domain gets greylisted/blocked
+// and returns "unknown". Set VERIFY_HELO_DOMAIN to a REAL domain you control
+// (ideally the reverse-DNS/PTR of this server's IP, with an SPF record), and
+// VERIFY_MAIL_FROM to a real-looking sender on it. See ACCURACY.md.
+const HELO_DOMAIN = (process.env.VERIFY_HELO_DOMAIN || 'verify.example.com').trim();
+const MAIL_FROM = (process.env.VERIFY_MAIL_FROM || `verify@${HELO_DOMAIN}`).trim();
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -14,6 +20,7 @@ async function checkSMTP(mxRecord, targetEmail, isCatchAllCheck = false) {
     return new Promise((resolve) => {
         const socket = new net.Socket();
         let step = 0;
+        let heloTried = false;
         let resultCode = 0;
         let resultMessage = '';
         let buffer = '';
@@ -33,19 +40,22 @@ async function checkSMTP(mxRecord, targetEmail, isCatchAllCheck = false) {
                 case 0: // Expecting 220 Greeting
                     if (code === 220) {
                         step++;
-                        sendCommand(`EHLO ${PROBE_DOMAIN}`);
+                        sendCommand(`EHLO ${HELO_DOMAIN}`);
                     } else {
                         socket.destroy();
                         resolve({ code, connected: true, message: 'Unexpected greeting' });
                     }
                     break;
-                case 1: // Expecting 250 from EHLO
+                case 1: // Expecting 250 from EHLO (fall back to HELO once)
                     if (code === 250) {
                         step++;
-                        sendCommand(`MAIL FROM:<probe@${PROBE_DOMAIN}>`);
+                        sendCommand(`MAIL FROM:<${MAIL_FROM}>`);
+                    } else if (!heloTried) {
+                        heloTried = true;                     // some servers only speak HELO
+                        sendCommand(`HELO ${HELO_DOMAIN}`);
                     } else {
                         socket.destroy();
-                        resolve({ code, connected: true, message: 'EHLO rejected' });
+                        resolve({ code, connected: true, message: 'EHLO/HELO rejected' });
                     }
                     break;
                 case 2: // Expecting 250 from MAIL FROM

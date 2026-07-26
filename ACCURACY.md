@@ -20,15 +20,26 @@ or `curl https://your-domain/health`.
 
 ## To reach 90–95% accuracy — pick one
 
-### Option A — Unblock outbound port 25 (best; free)
-Run the backend on a host that allows port 25, or ask your provider to unblock
-it. Some VPS providers (e.g. certain Hetzner/OVH/Contabo plans) allow it or
-unblock on request after a quick anti-abuse check. Once open, the built-in
-verifier gives real mailbox-level results for Gmail, Outlook, Yahoo, custom
-domains, etc. Confirm with `/health` showing `"port25": true`.
+### Option A — Port 25 open (best; free) ✅ you have this
+Confirm with `/health` showing `"port25": true`. With port 25 open the built-in
+verifier gives real mailbox-level results — but to actually reach 90–95% you must
+also make mail servers TRUST your probe, or Gmail/Outlook greylist it and return
+"unknown":
 
-> Tip: even with port 25 open, use a clean IP with proper reverse DNS (PTR) and
-> an SPF record for the probe domain, or some servers greylist/deny the probe.
+1. **Use a real HELO/MAIL FROM domain** (this is the big one). In `.env`:
+   ```
+   VERIFY_HELO_DOMAIN=mail.yourdomain.com
+   VERIFY_MAIL_FROM=verify@yourdomain.com
+   ```
+   Use a domain you actually own — not the placeholder `verify.example.com`.
+2. **Reverse DNS (PTR)** for your server's IP should resolve to that host
+   (`VERIFY_HELO_DOMAIN`). Ask your VPS provider to set the PTR record. Mail
+   servers heavily weight a matching PTR.
+3. **SPF record** on that domain listing your server IP helps acceptance.
+4. Keep `VERIFY_CONCURRENCY` moderate (default 10). If you see lots of "unknown"
+   from one provider, it's rate-limiting — lower it.
+
+After setting these, re-run a small test list. Valid/invalid rates should jump.
 
 ### Option B — Use a verification API (works even with port 25 blocked)
 Route verification through a provider that already has port-25 infrastructure —
