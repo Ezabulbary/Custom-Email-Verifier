@@ -88,6 +88,97 @@ function normalizeMessage(msg) {
         .trim();
 }
 
+// --- Reoon-style fine-grained status taxonomy -------------------------------
+// Every verification resolves to exactly ONE of these statuses. They mirror the
+// categories used by services like Reoon, so each result carries a precise,
+// self-explanatory verdict instead of a coarse valid/invalid:
+//
+//   safe       - real, deliverable mailbox (most likely a personal address)
+//   role       - deliverable, but a role/group address (support@, info@, …)
+//   catch-all  - domain accepts every address; the individual mailbox is unverifiable
+//   disposable - temporary / throwaway email provider
+//   invalid    - mailbox does not exist / domain rejects mail (will bounce)
+//   inbox_full - mailbox exists but is over quota (may soft-bounce)
+//   disabled   - mailbox existed but has been disabled / suspended
+//   spamtrap   - address used to catch spammers — never send to it
+//   unknown    - server gave no definitive answer (greylisting, blocked port, …)
+const STATUSES = ['safe', 'role', 'catch-all', 'disposable', 'invalid', 'inbox_full', 'disabled', 'spamtrap', 'unknown'];
+
+// Coarse rollup buckets for batch summaries / bounce-rate estimates. The
+// per-address status above is always the source of truth; this only groups
+// statuses together for aggregate counts.
+function statusBucket(status) {
+    switch (status) {
+        case 'safe':
+        case 'role':       return 'valid';
+        case 'invalid':
+        case 'disabled':
+        case 'disposable': return 'invalid';
+        case 'catch-all':  return 'catchAll';
+        default:           return 'unknown'; // inbox_full, spamtrap, unknown
+    }
+}
+
+// Role / group mailboxes: valid and deliverable, but not a specific person.
+const ROLE_LOCALPARTS = new Set([
+    'admin', 'administrator', 'postmaster', 'hostmaster', 'webmaster', 'root',
+    'support', 'help', 'helpdesk', 'info', 'contact', 'enquiries', 'enquiry', 'inquiries',
+    'sales', 'marketing', 'billing', 'accounts', 'accounting', 'finance', 'orders',
+    'abuse', 'security', 'noc', 'privacy', 'legal', 'compliance',
+    'hr', 'careers', 'jobs', 'recruiting', 'office', 'team', 'hello', 'service', 'services',
+    'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'mailer-daemon',
+    'newsletter', 'news', 'media', 'press', 'feedback', 'all', 'everyone', 'staff'
+]);
+
+function isRoleAddress(email) {
+    const local = String(email).split('@')[0].toLowerCase().split('+')[0].trim();
+    return ROLE_LOCALPARTS.has(local);
+}
+
+// Known spam-trap / honeypot domains. Reliable spamtrap detection needs
+// proprietary data, so this is a best-effort list you can extend via the
+// SPAMTRAP_DOMAINS env var (comma-separated) without touching code.
+const SPAMTRAP_DOMAINS = new Set(
+    (process.env.SPAMTRAP_DOMAINS || '')
+        .split(',').map(d => d.trim().toLowerCase()).filter(Boolean)
+);
+function isSpamtrapDomain(domain) {
+    return SPAMTRAP_DOMAINS.has(domain);
+}
+
+// Inspect an SMTP reply for signals that distinguish an over-quota mailbox or a
+// disabled/suspended account (both of which imply the mailbox EXISTS) from a
+// plain "no such user" rejection. Returns 'spamtrap' | 'inbox_full' | 'disabled'
+// | null.
+function classifySmtpMessage(message) {
+    const m = (message || '').toLowerCase();
+    if (m.includes('spamtrap') || m.includes('spam trap')) return 'spamtrap';
+
+    const fullHints = [
+        'over quota', 'over-quota', 'overquota', 'quota exceeded', 'exceeded storage',
+        'insufficient storage', 'insufficient system storage', 'mailbox full', 'mailbox is full',
+        'inbox is full', 'user is over quota', 'not enough space', 'out of storage',
+        '452 4.2.2', '552 5.2.2'
+    ];
+    if (fullHints.some(h => m.includes(h))) return 'inbox_full';
+
+    const disabledHints = [
+        'disabled', 'suspended', 'deactivated', 'account is inactive', 'no longer active',
+        'no longer in use', 'account has been closed', 'account closed', 'account is locked',
+        'account blocked', 'blocked for spam', 'blocked for abuse'
+    ];
+    if (disabledHints.some(h => m.includes(h))) return 'disabled';
+
+    return null;
+}
+
+// Mark a confirmed-deliverable address as either 'safe' (personal) or 'role'.
+function setDeliverable(result, email, confidence, reason) {
+    result.status = isRoleAddress(email) ? 'role' : 'safe';
+    result.confidence = confidence;
+    result.reason = reason;
+}
+
 async function verifyEmail(email) {
     const result = {
         email,
@@ -120,9 +211,17 @@ async function verifyEmail(email) {
     // 2. Disposable Check
     if (isDisposable(domain)) {
         result.disposable = true;
-        result.status = 'invalid';
+        result.status = 'disposable';
         result.confidence = 95;
-        result.reason = 'Disposable email provider';
+        result.reason = 'Disposable / temporary email provider';
+        return result;
+    }
+
+    // 2b. Known spam-trap domain (best-effort; extend via SPAMTRAP_DOMAINS).
+    if (isSpamtrapDomain(domain)) {
+        result.status = 'spamtrap';
+        result.confidence = 90;
+        result.reason = 'Known spam-trap domain — do not send';
         return result;
     }
 
@@ -179,14 +278,35 @@ async function verifyEmail(email) {
         // SMTP unreachable (commonly: outbound port 25 is blocked). Fall back to
         // any provider-level signal we already gathered.
         if (m365 && m365.exists === true) {
-            result.status = 'valid';
-            result.confidence = 80;
-            result.reason = 'Microsoft 365 confirms the mailbox exists (SMTP unreachable)';
+            setDeliverable(result, email, 80, 'Microsoft 365 confirms the mailbox exists (SMTP unreachable)');
         } else {
             result.status = 'unknown';
             result.confidence = 15;
             result.reason = 'Failed to connect to SMTP server: ' + smtpResult.message;
         }
+        return result;
+    }
+
+    // Read the human-readable part of a non-250 reply to separate an over-quota
+    // mailbox / disabled account / spam trap (mailbox effectively exists) from a
+    // plain "no such user" rejection.
+    const smtpClass = smtpResult.code !== 250 ? classifySmtpMessage(smtpResult.message) : null;
+    if (smtpClass === 'spamtrap') {
+        result.status = 'spamtrap';
+        result.confidence = 85;
+        result.reason = 'Address flagged as a spam trap — do not send';
+        return result;
+    }
+    if (smtpClass === 'inbox_full') {
+        result.status = 'inbox_full';
+        result.confidence = 70;
+        result.reason = `Mailbox exists but is full / over quota (SMTP ${smtpResult.code})`;
+        return result;
+    }
+    if (smtpClass === 'disabled') {
+        result.status = 'disabled';
+        result.confidence = 80;
+        result.reason = `Mailbox exists but has been disabled / suspended (SMTP ${smtpResult.code})`;
         return result;
     }
 
@@ -234,9 +354,7 @@ async function verifyEmail(email) {
         if (acceptedProbes < CATCH_ALL_PROBES) {
             // At least one random address was rejected -> not catch-all -> the
             // real address being accepted means the mailbox exists.
-            result.status = 'valid';
-            result.confidence = (m365 && m365.exists === true) ? 92 : 85;
-            result.reason = 'Mailbox exists';
+            setDeliverable(result, email, (m365 && m365.exists === true) ? 92 : 85, 'Mailbox exists');
             return result;
         }
 
@@ -247,9 +365,7 @@ async function verifyEmail(email) {
             && probeMessages.every(m => normalizeMessage(m) !== realNorm);
 
         if (m365 && m365.exists === true) {
-            result.status = 'valid';
-            result.confidence = 82;
-            result.reason = 'Catch-all domain, but Microsoft 365 confirms the mailbox exists';
+            setDeliverable(result, email, 82, 'Catch-all domain, but Microsoft 365 confirms the mailbox exists');
         } else if (serverDistinguishes) {
             result.status = 'catch-all';
             result.confidence = 60;
@@ -296,14 +412,17 @@ async function quickVerify(email) {
     result.syntax = true;
     const domain = email.split('@')[1].toLowerCase();
     if (isDisposable(domain)) {
-        result.disposable = true; result.status = 'invalid'; result.confidence = 90;
-        result.reason = 'Disposable email provider'; return result;
+        result.disposable = true; result.status = 'disposable'; result.confidence = 90;
+        result.reason = 'Disposable / temporary email provider'; return result;
+    }
+    if (isSpamtrapDomain(domain)) {
+        result.status = 'spamtrap'; result.confidence = 90; result.reason = 'Known spam-trap domain'; return result;
     }
     const ok = await domainHasMx(domain);
     result.mxFound = ok;
     if (!ok) { result.status = 'invalid'; result.confidence = 85; result.reason = 'Domain has no mail server (will bounce)'; return result; }
-    result.status = 'valid'; result.confidence = 60; result.reason = 'Domain accepts mail (not mailbox-verified)';
+    setDeliverable(result, email, 60, 'Domain accepts mail (not mailbox-verified)');
     return result;
 }
 
-module.exports = { verifyEmail, quickVerify };
+module.exports = { verifyEmail, quickVerify, statusBucket, isRoleAddress, classifySmtpMessage, STATUSES };

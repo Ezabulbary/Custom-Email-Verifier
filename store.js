@@ -15,6 +15,7 @@
 //   password_resets/{tokenHash}                -> reset token
 
 const { isFirestoreEnabled, getFirestore } = require('./firebaseAdmin');
+const { statusBucket } = require('./verifier');
 
 const HISTORY_RETENTION_DAYS = 30;
 const HISTORY_MAX_STORED_RESULTS = 5000;   // cap stored payload per execution
@@ -29,10 +30,9 @@ function summarize(results) {
     const s = { total: results.length, valid: 0, invalid: 0, catchAll: 0, unknown: 0, disposable: 0 };
     for (const r of results) {
         if (r && r.disposable) s.disposable++;
-        if (r && r.status === 'valid') s.valid++;
-        else if (r && r.status === 'invalid') s.invalid++;
-        else if (r && r.status === 'catch-all') s.catchAll++;
-        else s.unknown++;
+        // statusBucket maps the fine-grained statuses (safe, role, inbox_full,
+        // disabled, spamtrap, …) onto the four rollup buckets used here.
+        s[statusBucket(r && r.status)]++;
     }
     return s;
 }

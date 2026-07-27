@@ -322,8 +322,14 @@
   display: inline-block;
 }
 .badge.valid { background: #d1fae5; color: #059669; }
+.badge.safe { background: #d1fae5; color: #059669; }
+.badge.role { background: #ccfbf1; color: #0d9488; }
 .badge.invalid { background: #fee2e2; color: #dc2626; }
 .badge.catch-all { background: #fef3c7; color: #d97706; }
+.badge.inbox_full { background: #ffedd5; color: #c2410c; }
+.badge.disposable { background: #fee2e2; color: #dc2626; }
+.badge.disabled { background: #fde2e2; color: #b91c1c; }
+.badge.spamtrap { background: #fecaca; color: #991b1b; }
 .badge.unknown { background: #f1f5f9; color: #64748b; }
 /* Role badges */
 .badge.role-superadmin { background: #ede9fe; color: #6d28d9; }

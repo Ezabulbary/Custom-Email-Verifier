@@ -210,12 +210,29 @@ const AppFooter = () => (
   </footer>
 );
 
+// Reoon-style fine-grained statuses -> display label + colour bucket. Keep in
+// sync with statusBucket() in verifier.js.
+const STATUS_META = {
+  safe:       { label: 'Safe',       icon: 'ok',   color: '#059669' },
+  role:       { label: 'Role',       icon: 'ok',   color: '#0d9488' },
+  valid:      { label: 'Valid',      icon: 'ok',   color: '#059669' }, // legacy results
+  'catch-all':{ label: 'Catch-all',  icon: 'warn', color: '#d97706' },
+  inbox_full: { label: 'Inbox Full', icon: 'warn', color: '#d97706' },
+  disposable: { label: 'Disposable', icon: 'bad',  color: '#dc2626' },
+  disabled:   { label: 'Disabled',   icon: 'bad',  color: '#dc2626' },
+  spamtrap:   { label: 'Spamtrap',   icon: 'bad',  color: '#b91c1c' },
+  invalid:    { label: 'Invalid',    icon: 'bad',  color: '#dc2626' },
+  unknown:    { label: 'Unknown',    icon: 'unk',  color: '#64748b' },
+};
+const statusMeta = (status) => STATUS_META[status] || STATUS_META.unknown;
+
 const StatusIcon = ({ status }) => {
-  switch (status) {
-    case 'valid': return <CheckCircle size={18} color="#059669" />;
-    case 'invalid': return <XCircle size={18} color="#dc2626" />;
-    case 'catch-all': return <AlertCircle size={18} color="#d97706" />;
-    default: return <HelpCircle size={18} color="#64748b" />;
+  const m = statusMeta(status);
+  switch (m.icon) {
+    case 'ok':   return <CheckCircle size={18} color={m.color} />;
+    case 'bad':  return <XCircle size={18} color={m.color} />;
+    case 'warn': return <AlertCircle size={18} color={m.color} />;
+    default:     return <HelpCircle size={18} color={m.color} />;
   }
 };
 
@@ -286,7 +303,7 @@ const ResultsTable = ({ results, title = 'Results' }) => {
               <td>
                 <div style={{display:'flex', alignItems:'center', gap:'0.5rem'}}>
                   <StatusIcon status={res.status} />
-                  <span className={`badge ${res.status || 'unknown'}`}>{(res.status || 'unknown').toUpperCase()}</span>
+                  <span className={`badge ${res.status || 'unknown'}`}>{statusMeta(res.status).label.toUpperCase()}</span>
                 </div>
               </td>
               <td><ConfidenceBar value={res.confidence} /></td>
@@ -1434,8 +1451,11 @@ const BounceChecker = () => {
     if (!results) return null;
     const s = { total: results.length, valid: 0, invalid: 0, catchAll: 0, unknown: 0 };
     for (const r of results) {
-      if (r.status === 'valid') s.valid++;
-      else if (r.status === 'invalid') s.invalid++;
+      // Bucket the fine-grained statuses the same way the backend does:
+      // safe/role -> valid, invalid/disabled/disposable -> invalid,
+      // catch-all -> catchAll, everything else (inbox_full/spamtrap/unknown) -> unknown.
+      if (r.status === 'safe' || r.status === 'role' || r.status === 'valid') s.valid++;
+      else if (r.status === 'invalid' || r.status === 'disabled' || r.status === 'disposable') s.invalid++;
       else if (r.status === 'catch-all') s.catchAll++;
       else s.unknown++;
     }

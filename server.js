@@ -560,9 +560,12 @@ setInterval(cleanupHistory, 6 * 60 * 60 * 1000);
 
 // A credit is charged ONLY for emails we could conclusively check. A 'unknown'
 // result means verification failed (SMTP unreachable, timeout, greylisting) —
-// those are never charged.
-const CHARGEABLE = new Set(['valid', 'invalid', 'catch-all']);
-const chargeableCount = (results) => results.reduce((n, r) => n + (r && CHARGEABLE.has(r.status) ? 1 : 0), 0);
+// those are never charged. Every other fine-grained status (safe, role,
+// catch-all, disposable, invalid, inbox_full, disabled, spamtrap) is a
+// definitive answer and is chargeable.
+const isChargeable = (status) => !!status && status !== 'unknown';
+const CHARGEABLE = { has: isChargeable };   // keep the .has(...) call-sites working
+const chargeableCount = (results) => results.reduce((n, r) => n + (r && isChargeable(r.status) ? 1 : 0), 0);
 
 // How many emails to verify concurrently in bulk/CSV runs.
 const VERIFY_CONCURRENCY = Math.max(1, parseInt(process.env.VERIFY_CONCURRENCY, 10) || 10);
