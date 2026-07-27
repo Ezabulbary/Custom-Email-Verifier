@@ -13,7 +13,11 @@ const MAIL_FROM = (process.env.VERIFY_MAIL_FROM || `verify@${HELO_DOMAIN}`).trim
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function checkSMTP(mxRecord, targetEmail, isCatchAllCheck = false) {
+// `connectHost`, when provided, is the pre-validated public IP to dial (the
+// caller resolves the MX hostname once and passes the vetted IP here, so this
+// function never triggers a second, unchecked DNS lookup — that would reopen a
+// DNS-rebinding SSRF). Falls back to the hostname if no IP is supplied.
+async function checkSMTP(mxRecord, targetEmail, isCatchAllCheck = false, connectHost = null) {
     // Add random delay between 100ms and 300ms to reduce rate-limiting
     await delay(100 + Math.random() * 200);
 
@@ -115,7 +119,7 @@ async function checkSMTP(mxRecord, targetEmail, isCatchAllCheck = false) {
             }
         });
 
-        socket.connect(SMTP_PORT, mxRecord);
+        socket.connect(SMTP_PORT, connectHost || mxRecord);
     });
 }
 

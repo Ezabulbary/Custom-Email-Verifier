@@ -188,6 +188,23 @@ function firestoreStore() {
                 tx.update(ref, { credits });
             });
         },
+        // Atomically reserve `amount` credits: deduct ONLY if the balance is
+        // sufficient, in one transaction. Returns { ok, credits }. This closes
+        // the check-then-deduct race where concurrent jobs each saw the full
+        // balance and overspent. Used to admit billing jobs; unused credits are
+        // refunded (adjustCredits with a positive delta) when the job finishes.
+        async reserveCredits(id, amount) {
+            const ref = users.doc(String(id));
+            return fs.runTransaction(async (tx) => {
+                const snap = await tx.get(ref);
+                if (!snap.exists) return { ok: false, credits: 0 };
+                const have = snap.data().credits || 0;
+                if (have < amount) return { ok: false, credits: have };
+                const credits = have - amount;
+                tx.update(ref, { credits });
+                return { ok: true, credits };
+            });
+        },
         async deleteUser(id) {
             const ref = users.doc(String(id));
             const snap = await ref.get();
@@ -296,6 +313,15 @@ function firestoreStore() {
         async getBatch(userId, id) {
             const doc = await users.doc(String(userId)).collection('batches').doc(String(id)).get();
             return doc.exists ? batchView(doc, true) : null;
+        },
+        // Delete one of a user's own batches. Returns 1 if it existed, 0 if not,
+        // so the caller can distinguish "deleted" from "not found".
+        async deleteBatch(userId, id) {
+            const ref = users.doc(String(userId)).collection('batches').doc(String(id));
+            const doc = await ref.get();
+            if (!doc.exists) return 0;
+            await ref.delete();
+            return 1;
         },
         async userStats(userId) {
             const cut = cutoffMs();

@@ -40,15 +40,24 @@ function isPrivateIP(ip, family) {
     return false;
 }
 
-async function resolvesToPublicHost(host) {
-    if (process.env.ALLOW_PRIVATE_MX === '1') return true;
-    // A raw IP literal in an MX record is itself suspicious — validate directly.
+// Resolve an MX host to a PUBLIC IP and return that IP (or null if it resolves
+// to a private/internal range or can't be resolved). Returning the concrete IP
+// lets the caller connect to it directly — closing the TOCTOU / DNS-rebinding
+// hole where a second, connect-time DNS lookup could return an internal address
+// after this guard passed.
+async function resolvePublicMxIp(host) {
+    if (process.env.ALLOW_PRIVATE_MX === '1') {
+        // Opt-out: still resolve so we have an IP to connect to, but don't block.
+        try { const a = await dnsPromises.lookup(host); return a.address; } catch { return null; }
+    }
     try {
         const addrs = await dnsPromises.lookup(host, { all: true });
-        if (!addrs || addrs.length === 0) return false;
-        return addrs.every(a => !isPrivateIP(a.address, a.family));
+        if (!addrs || addrs.length === 0) return null;
+        // Every resolved address must be public; connect to the first one.
+        if (!addrs.every(a => !isPrivateIP(a.address, a.family))) return null;
+        return addrs[0].address;
     } catch (err) {
-        return false;
+        return null;
     }
 }
 
@@ -150,16 +159,19 @@ async function verifyEmail(email) {
         }
     }
 
-    // SSRF guard: refuse to connect to MX hosts that resolve to internal ranges.
-    if (!(await resolvesToPublicHost(primaryMx))) {
+    // SSRF guard: resolve the MX host to a public IP ONCE and connect to that
+    // exact IP, so a rebinding attack can't slip an internal address in at
+    // connect time.
+    const mxIp = await resolvePublicMxIp(primaryMx);
+    if (!mxIp) {
         result.status = 'unknown';
         result.confidence = 10;
         result.reason = 'Mail server resolves to a non-public address (blocked)';
         return result;
     }
 
-    // 6. SMTP handshake for the real address
-    let smtpResult = await checkSMTP(primaryMx, email);
+    // 6. SMTP handshake for the real address (connect to the vetted IP)
+    let smtpResult = await checkSMTP(primaryMx, email, false, mxIp);
     result.smtpConnected = smtpResult.connected;
     result.smtpCode = smtpResult.code;
 
@@ -189,7 +201,7 @@ async function verifyEmail(email) {
     // Temporary failure / greylisting -> wait and retry once
     if (smtpResult.code >= 400 && smtpResult.code < 500) {
         await new Promise(r => setTimeout(r, 3000));
-        const retry = await checkSMTP(primaryMx, email);
+        const retry = await checkSMTP(primaryMx, email, false, mxIp);
         result.smtpCode = retry.code;
         if (retry.code >= 500 && retry.code < 600) {
             result.status = 'invalid';
@@ -212,7 +224,7 @@ async function verifyEmail(email) {
         const probeMessages = [];
         for (let i = 0; i < CATCH_ALL_PROBES; i++) {
             const fake = `${randomLocalPart()}@${domain}`;
-            const probe = await checkSMTP(primaryMx, fake, true);
+            const probe = await checkSMTP(primaryMx, fake, true, mxIp);
             if (probe.code === 250) {
                 acceptedProbes++;
                 probeMessages.push(probe.message);

@@ -2080,6 +2080,17 @@ const TasksResults = () => {
     catch (err) { alert(friendlyError(err)); }
     finally { setBusy(null); }
   };
+  const remove = async (b) => {
+    if (!window.confirm(`Delete batch #${b.batchNumber ?? b.id}? This cannot be undone.`)) return;
+    setBusy(b.id);
+    try {
+      const data = await apiFetch(`/history/${b.id}`, { method: 'DELETE' });
+      if (data.error) throw new Error(data.error);
+      setBatches(bs => bs.filter(x => x.id !== b.id));
+      if (expanded === b.id) { setExpanded(null); setDetail(null); }
+    } catch (err) { alert(friendlyError(err)); }
+    finally { setBusy(null); }
+  };
 
   return (
     <div>
@@ -2141,12 +2152,18 @@ const TasksResults = () => {
                         </div>
                       </td>
                       <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
-                        {b.total > 0 && (
-                          <button className="btn-secondary" title="Download CSV"
-                            onClick={(e) => { e.stopPropagation(); download(b); }}>
-                            {busy === b.id ? <Loader2 className="loader" size={14}/> : <Download size={14}/>} Download
+                        <div style={{display:'inline-flex', gap:'0.4rem', alignItems:'center'}}>
+                          {b.total > 0 && (
+                            <button className="btn-secondary" title="Download CSV"
+                              onClick={(e) => { e.stopPropagation(); download(b); }}>
+                              {busy === b.id ? <Loader2 className="loader" size={14}/> : <Download size={14}/>} Download
+                            </button>
+                          )}
+                          <button className="icon-btn danger" title="Delete this batch"
+                            onClick={(e) => { e.stopPropagation(); remove(b); }}>
+                            <Trash2 size={15}/>
                           </button>
-                        )}
+                        </div>
                       </td>
                     </tr>
                     {expanded === b.id && (
@@ -2190,6 +2207,11 @@ const AdminPanel = () => {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [viewerRole, setViewerRole] = useState(user.role);
+  // Per-row "amount to add" (a delta), keyed by user id. The Credits column is
+  // an add-box — it never shows the existing balance; whatever you type/step
+  // here is ADDED to the user's current credits when you press Enter / ✓.
+  const [credAdd, setCredAdd] = useState({});
+  const [credFlash, setCredFlash] = useState({}); // transient "+N added" per row
 
   // Superadmins may assign any role; a plain admin may only set user/admin.
   const roleOptions = viewerRole === 'superadmin' ? ['user', 'admin', 'superadmin'] : ['user', 'admin'];
@@ -2207,10 +2229,25 @@ const AdminPanel = () => {
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
-  const adjustCredits = async (id, delta) => {
+  const stepAdd = (id, by) => setCredAdd(m => ({ ...m, [id]: (parseInt(m[id], 10) || 0) + by }));
+  const typeAdd = (id, v) => {
+    // allow empty, a lone "-", and integers (incl. negative) while typing
+    if (v === '' || v === '-' || /^-?\d+$/.test(v)) setCredAdd(m => ({ ...m, [id]: v }));
+  };
+
+  // Apply the row's add-amount: ADD it to the user's existing credits (the
+  // backend does existing + delta) and reset the box.
+  const applyAdd = async (id) => {
+    const delta = parseInt(credAdd[id], 10);
+    if (Number.isNaN(delta) || delta === 0) { setCredAdd(m => ({ ...m, [id]: '' })); return; }
     const data = await apiFetch(`/admin/users/${id}/credits`, { method: 'POST', body: JSON.stringify({ delta }) });
     if (data.error) return alert(data.error);
     setUsers(us => us.map(u => u.id === id ? { ...u, credits: data.credits } : u));
+    setCredAdd(m => ({ ...m, [id]: '' }));
+    // brief confirmation of what was added (not the running balance)
+    const label = `${delta > 0 ? '+' : ''}${delta} added`;
+    setCredFlash(m => ({ ...m, [id]: label }));
+    setTimeout(() => setCredFlash(m => { const n = { ...m }; delete n[id]; return n; }), 2500);
     // If the admin changed their OWN credits, refresh the auth user so the
     // sidebar and Overview reflect it immediately (no page reload needed).
     if (String(id) === String(user.id)) refreshUser();
@@ -2248,7 +2285,7 @@ const AdminPanel = () => {
         ) : (
           <div style={{overflowX:'auto'}}>
             <table className="results-table">
-              <thead><tr><th>ID</th><th>Email</th><th>Role</th><th>Credits</th><th>Verified</th><th>Joined</th><th>Actions</th></tr></thead>
+              <thead><tr><th>ID</th><th>Email</th><th>Role</th><th>Add Credits</th><th>Verified</th><th>Joined</th><th>Actions</th></tr></thead>
               <tbody>
                 {users.map(u => (
                   <tr key={u.id}>
@@ -2257,9 +2294,20 @@ const AdminPanel = () => {
                     <td><span className={`badge role-${u.role || 'user'}`}>{ROLE_LABELS[u.role] || 'User'}</span></td>
                     <td>
                       <div style={{display:'flex', alignItems:'center', gap:'0.35rem'}}>
-                        <button className="icon-btn" title="-100" onClick={() => adjustCredits(u.id, -100)}><Minus size={14}/></button>
-                        <strong style={{minWidth:'54px', textAlign:'center'}}>{u.credits}</strong>
-                        <button className="icon-btn" title="+100" onClick={() => adjustCredits(u.id, 100)}><Plus size={14}/></button>
+                        <button className="icon-btn" title="Decrease amount by 100" onClick={() => stepAdd(u.id, -100)}><Minus size={14}/></button>
+                        <input
+                          className="cred-add-input"
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="0"
+                          value={credAdd[u.id] ?? ''}
+                          onChange={(e) => typeAdd(u.id, e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') applyAdd(u.id); }}
+                          title="Amount to add to this user's credits, then press Enter or ✓"
+                        />
+                        <button className="icon-btn" title="Increase amount by 100" onClick={() => stepAdd(u.id, 100)}><Plus size={14}/></button>
+                        <button className="icon-btn primary" title="Add to existing credits" onClick={() => applyAdd(u.id)}><CheckCircle2 size={15}/></button>
+                        {credFlash[u.id] && <span className="cred-flash">{credFlash[u.id]}</span>}
                       </div>
                     </td>
                     <td>{u.emails_verified}</td>

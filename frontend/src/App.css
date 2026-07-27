@@ -479,6 +479,15 @@
 }
 .icon-btn:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
 .icon-btn.danger:hover { background: #fee2e2; color: #dc2626; border-color: #fecaca; }
+.icon-btn.primary { background: var(--accent-color); color: #fff; border-color: var(--accent-color); }
+.icon-btn.primary:hover { filter: brightness(1.08); color: #fff; }
+.cred-add-input {
+  width: 72px; height: 30px; text-align: center;
+  border: 1px solid var(--border-color); border-radius: 7px;
+  background: var(--bg-surface); color: var(--text-primary); font-size: 0.9rem; font-weight: 600;
+}
+.cred-add-input:focus { outline: none; border-color: var(--accent-color); }
+.cred-flash { font-size: 0.78rem; color: #059669; font-weight: 600; white-space: nowrap; }
 
 /* --- Public / Landing pages --- */
 .public-page { min-height: 100vh; background: var(--bg-color); }

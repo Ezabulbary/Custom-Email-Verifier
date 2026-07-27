@@ -26,6 +26,14 @@ const { isEmailEnabled, sendResetEmail } = require('./mailer');
 const store = require('./store');
 const totp = require('./totp');
 const QRCode = require('qrcode');
+const { rateLimit } = require('./rateLimit');
+
+// Rate limiters for abuse-prone endpoints (brute force, enumeration, mail/credit
+// abuse). Fixed-window, per client IP. Generous enough for real users.
+const loginLimiter  = rateLimit({ name: 'login',  windowMs: 15 * 60 * 1000, max: 20, message: 'Too many login attempts. Please wait a few minutes.' });
+const twofaLimiter  = rateLimit({ name: '2fa',    windowMs: 15 * 60 * 1000, max: 15, message: 'Too many 2FA attempts. Please wait a few minutes.' });
+const registerLimiter = rateLimit({ name: 'reg',  windowMs: 60 * 60 * 1000, max: 15, message: 'Too many accounts created from this network. Please try later.' });
+const resetLimiter  = rateLimit({ name: 'reset',  windowMs: 60 * 60 * 1000, max: 10, message: 'Too many password-reset requests. Please try later.' });
 
 const app = express();
 
@@ -119,7 +127,11 @@ app.get('/health', (req, res) => {
 
 // --- Auth Endpoints ---
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Reject '/' as well as whitespace/@: the lowercased email is used as the
+// Firestore document id, and a '/' would be interpreted as a collection-path
+// separator (corrupting the path). Real-world email addresses never contain
+// '/', so excluding it is safe and closes that injection vector.
+const EMAIL_RE = /^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/;
 
 // Roles, highest to lowest. superadmin > admin > user.
 const ROLES = ['user', 'admin', 'superadmin'];
@@ -154,7 +166,7 @@ function bootstrapRole(email, isFirstUser) {
     }
 })();
 
-app.post('/auth/register', async (req, res) => {
+app.post('/auth/register', registerLimiter, async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
     if (typeof email !== 'string' || typeof password !== 'string') {
@@ -179,9 +191,15 @@ app.post('/auth/register', async (req, res) => {
     }
 });
 
-app.post('/auth/login', async (req, res) => {
+app.post('/auth/login', loginLimiter, async (req, res) => {
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Invalid email or password' });
+    if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+        return res.status(400).json({ error: 'Invalid email or password' });
+    }
+    // Validate the format before it's used as a Firestore document id. Same
+    // generic message as a wrong password, so this never reveals whether an
+    // account exists.
+    if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'Invalid email or password' });
 
     try {
         const user = await store.findUserByEmail(email);
@@ -209,7 +227,7 @@ app.post('/auth/login', async (req, res) => {
 
 // Step 2 of login when 2FA is on: exchange tempToken + authenticator code for a
 // real session token.
-app.post('/auth/2fa/verify', async (req, res) => {
+app.post('/auth/2fa/verify', twofaLimiter, async (req, res) => {
     const { tempToken, code } = req.body || {};
     let payload;
     try { payload = jwt.verify(tempToken, JWT_SECRET); }
@@ -313,7 +331,7 @@ async function deliverResetEmail(email, link) {
 }
 
 // Request a password reset. Always responds success (no account enumeration).
-app.post('/auth/forgot-password', async (req, res) => {
+app.post('/auth/forgot-password', resetLimiter, async (req, res) => {
     const email = (req.body && req.body.email || '').trim().toLowerCase();
     const ok = () => res.json({ success: true });
     if (!email || !EMAIL_RE.test(email)) return ok();
@@ -369,6 +387,10 @@ function authenticateToken(req, res, next) {
 
     jwt.verify(token, JWT_SECRET, (err, user) => {
         if (err) return res.status(403).json({ error: 'Forbidden' });
+        // A pre-2FA token (issued by /auth/login when 2FA is on) is NOT a session
+        // token — it only authorises /auth/2fa/verify. Reject it everywhere else,
+        // otherwise anyone with just the password could skip the second factor.
+        if (user && user.twofa) return res.status(403).json({ error: 'Two-factor verification required' });
         req.user = user;
         next();
     });
@@ -552,12 +574,21 @@ app.post('/verify', authenticateToken, async (req, res) => {
     try {
         const user = await store.getUserById(req.user.id);
         if (!user) return res.status(404).json({ error: 'User not found' });
-        if (user.credits < 1) return res.status(402).json({ error: 'Insufficient credits' });
+        // Atomically reserve 1 credit so concurrent single checks can't overspend
+        // a low balance. Refunded below if the result turns out non-chargeable.
+        const reservation = await store.reserveCredits(req.user.id, 1);
+        if (!reservation.ok) return res.status(402).json({ error: 'Insufficient credits' });
 
-        const result = await verifyEmail(email);
-        // Only charge if the check produced a conclusive verdict.
+        let result;
+        try {
+            result = await verifyEmail(email);
+        } catch (e) {
+            await store.adjustCredits(req.user.id, 1); // refund on failure
+            throw e;
+        }
+        // Charge only for a conclusive verdict; refund the reserved credit otherwise.
         const charge = CHARGEABLE.has(result.status) ? 1 : 0;
-        if (charge) await store.deductCredits(req.user.id, charge);
+        if (!charge) await store.adjustCredits(req.user.id, 1);
         const batch = await saveBatch(req.user.id, 'single', [result], (req.body.name || '').toString().slice(0, 120) || null);
 
         res.json({ ...result, charged: charge, batchId: batch && batch.id, batchNumber: batch && batch.batchNumber });
@@ -611,11 +642,13 @@ async function runJob(job) {
             },
             () => { job.processed++; }
         );
-        // Charge only when this job bills (bounce checks are free) and only for
-        // emails that were successfully checked.
+        // Credits were reserved up front (job.reserved). Bill only the addresses
+        // that were successfully checked and REFUND the rest, so we never charge
+        // for 'unknown' results and never double-charge.
         if (job.charge) {
-            const charge = chargeableCount(job.results);
-            if (charge > 0) await store.deductCredits(job.userId, charge);
+            const charge = Math.min(chargeableCount(job.results), job.reserved || 0);
+            const refund = (job.reserved || 0) - charge;
+            if (refund > 0) await store.adjustCredits(job.userId, refund);
             job.charged = charge;
         } else {
             job.charged = 0;
@@ -628,24 +661,45 @@ async function runJob(job) {
         console.error('Job error:', err.message);
         job.status = 'error';
         job.error = 'Verification failed';
+        // The job failed before billing — refund everything we reserved so a
+        // crash never silently eats the user's credits.
+        if (job.charge && job.reserved > 0) {
+            try { await store.adjustCredits(job.userId, job.reserved); } catch {}
+        }
     }
     // Free the job from memory a while after it finishes.
     setTimeout(() => jobs.delete(job.id), 10 * 60 * 1000);
 }
 
+// Hard cap on how many addresses a single job may process. Prevents a single
+// upload (incl. the free /bounce path) from spawning hundreds of thousands of
+// DNS/SMTP lookups and holding a giant results array in memory.
+const MAX_EMAILS_PER_JOB = Math.max(1, parseInt(process.env.MAX_EMAILS_PER_JOB, 10) || 50000);
+
 // opts: { type, emails, name, sources, verifyFn, charge, concurrency }
 async function startVerificationJob(req, res, opts) {
     const { type, emails, name, sources = null, verifyFn = verifyEmail, charge = true, concurrency } = opts;
+    if (emails.length > MAX_EMAILS_PER_JOB) {
+        return res.status(413).json({ error: `Too many addresses in one job (max ${MAX_EMAILS_PER_JOB.toLocaleString()}). Split the list into smaller files.` });
+    }
     const user = await store.getUserById(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    // Billing jobs require enough credits up front (only successful checks are
-    // actually charged when the job finishes). Free jobs (bounce) skip this.
-    if (charge && user.credits < emails.length) {
-        return res.status(402).json({ error: `Insufficient credits: need ${emails.length}, have ${user.credits}` });
+
+    // Billing jobs: ATOMICALLY reserve one credit per address up front, so
+    // concurrent jobs can't each pass a stale balance check and overspend. Only
+    // successful checks are actually billed — unused credits are refunded when
+    // the job finishes. Free jobs (bounce) skip this entirely.
+    let reserved = 0;
+    if (charge) {
+        const r = await store.reserveCredits(req.user.id, emails.length);
+        if (!r.ok) {
+            return res.status(402).json({ error: `Insufficient credits: need ${emails.length}, have ${r.credits}` });
+        }
+        reserved = emails.length;
     }
     const job = {
         id: makeJobId(), userId: req.user.id, type, name,
-        emails, sources, verifyFn, charge, concurrency,
+        emails, sources, verifyFn, charge, concurrency, reserved,
         total: emails.length, processed: 0,
         results: null, status: 'processing', createdAt: Date.now(),
     };
@@ -835,6 +889,21 @@ app.get('/history/:id', authenticateToken, async (req, res) => {
     } catch (e) {
         console.error('Batch fetch error:', e.message);
         res.status(500).json({ error: 'Failed to load batch' });
+    }
+});
+
+// Delete one of the logged-in user's own batches. Scoped to req.user.id, so a
+// user can only ever delete their own history (never someone else's).
+app.delete('/history/:id', authenticateToken, async (req, res) => {
+    const id = (req.params.id == null ? '' : String(req.params.id)).trim();
+    if (!id) return res.status(400).json({ error: 'Invalid batch id' });
+    try {
+        const removed = await store.deleteBatch(req.user.id, id);
+        if (!removed) return res.status(404).json({ error: 'Batch not found' });
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Batch delete error:', e.message);
+        res.status(500).json({ error: 'Failed to delete batch' });
     }
 });
 
