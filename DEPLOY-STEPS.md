@@ -65,6 +65,15 @@ JWT_SECRET=YOUR_LONG_RANDOM_SECRET
 FRONTEND_URL=https://verifier.yourdomain.com
 VERIFY_HELO_DOMAIN=mail.yourdomain.com
 VERIFY_MAIL_FROM=verify@yourdomain.com
+
+# ---- Forgot-password ইমেইল পাঠাতে SMTP (নিচের ৫টা লাইন) ----
+# এগুলো না দিলে "Forgot password" ইমেইল যাবে না (লিংক শুধু pm2 log-এ দেখাবে)।
+# Gmail উদাহরণ: SMTP_PASS এ Gmail-এর "App Password" বসান (সাধারণ পাসওয়ার্ড না)।
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com
+SMTP_PASS=YOUR_GMAIL_APP_PASSWORD
+SMTP_FROM=BounceCure <you@gmail.com>
 ```
 সেভ: `Ctrl+O` `Enter`, বের হন: `Ctrl+X`।
 
@@ -169,6 +178,21 @@ pm2 restart bouncecure
 ```
 
 ---
+
+## Forgot password (কেন কাজ করছিল না)
+"Forgot password" আসলে ঠিকই কাজ করে — কিন্তু ইমেইল পাঠাতে **SMTP** লাগে। STEP 4-এ
+`SMTP_...` ৫টা লাইন দিলে ইউজার asli reset ইমেইল পাবে। না দিলে সিস্টেম চলবে ঠিকই,
+শুধু reset লিংকটা pm2 log-এ দেখাবে (`pm2 logs bouncecure` → `[Reset] Password-reset link ...`)।
+Gmail দিয়ে করলে অবশ্যই **App Password** লাগবে (Google Account → Security → 2-Step
+Verification চালু → App passwords)। সাধারণ Gmail পাসওয়ার্ড কাজ করবে না।
+
+## Two-Factor Authentication (2FA — Authenticator App)
+এটা এখন পুরোপুরি কাজ করে, extra কোনো সেটআপ লাগে না:
+1. লগইন করে **My Account** পেজে যান → **Two-Factor Authentication** কার্ডে **Enable Now**।
+2. Google Authenticator / Authy দিয়ে QR স্ক্যান করুন (বা manual key বসান) → অ্যাপে দেখানো
+   ৬-ডিজিটের কোড লিখে **Verify & Enable**।
+3. এরপর থেকে লগইনে পাসওয়ার্ডের পর ওই ৬-ডিজিট কোড চাইবে।
+4. বন্ধ করতে: My Account → **Disable** → একটা বর্তমান কোড দিন।
 
 ## কিছু আটকে গেলে
 - `pm2 logs bouncecure` চালিয়ে error লাইনটা আমাকে পাঠান।

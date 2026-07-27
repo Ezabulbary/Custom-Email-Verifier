@@ -24,6 +24,8 @@ const { verifyEmail, quickVerify } = require('./verifier');
 const { isGoogleEnabled, verifyIdToken } = require('./firebaseAdmin');
 const { isEmailEnabled, sendResetEmail } = require('./mailer');
 const store = require('./store');
+const totp = require('./totp');
+const QRCode = require('qrcode');
 
 const app = express();
 
@@ -189,11 +191,40 @@ app.post('/auth/login', async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ error: 'Invalid email or password' });
 
+        // If 2FA (authenticator app) is enabled, don't issue the real token yet —
+        // return a short-lived tempToken and require a code via /auth/2fa/verify.
+        const twoFA = await store.getTwoFactor(user.id);
+        if (twoFA && twoFA.totpEnabled) {
+            const tempToken = jwt.sign({ id: user.id, twofa: true }, JWT_SECRET, { expiresIn: '10m' });
+            return res.json({ twoFactorRequired: true, tempToken });
+        }
+
         const token = jwt.sign({ id: user.id, email: user.email, role: user.role || 'user' }, JWT_SECRET, { expiresIn: '24h' });
         res.json({ token, user: { id: user.id, email: user.email, credits: user.credits, role: user.role || 'user' } });
     } catch (err) {
         console.error('Login error:', err.message);
         res.status(500).json({ error: 'Database error' });
+    }
+});
+
+// Step 2 of login when 2FA is on: exchange tempToken + authenticator code for a
+// real session token.
+app.post('/auth/2fa/verify', async (req, res) => {
+    const { tempToken, code } = req.body || {};
+    let payload;
+    try { payload = jwt.verify(tempToken, JWT_SECRET); }
+    catch { return res.status(401).json({ error: 'This sign-in session expired. Please log in again.' }); }
+    if (!payload || !payload.twofa) return res.status(400).json({ error: 'Invalid session' });
+    try {
+        const twoFA = await store.getTwoFactor(payload.id);
+        if (!twoFA || !twoFA.totpEnabled || !twoFA.totpSecret) return res.status(400).json({ error: '2FA is not enabled' });
+        if (!totp.verify(twoFA.totpSecret, code)) return res.status(400).json({ error: 'Invalid or expired code' });
+        const user = await store.getUserById(payload.id);
+        const token = jwt.sign({ id: user.id, email: user.email, role: user.role || 'user' }, JWT_SECRET, { expiresIn: '24h' });
+        res.json({ token, user: { id: user.id, email: user.email, credits: user.credits, role: user.role || 'user' } });
+    } catch (e) {
+        console.error('2FA verify error:', e.message);
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
@@ -264,13 +295,21 @@ async function deliverResetEmail(email, link) {
             console.log(`[Reset] Reset email sent to ${email}.`);
             return;
         } catch (e) {
-            console.error(`[Reset] Failed to send reset email to ${email}:`, e.message);
+            // Loud, actionable — if reset emails aren't arriving, the SMTP error
+            // (bad credentials, wrong host/port, blocked outbound 587/465) is here.
+            console.error(`[Reset] FAILED to send reset email to ${email}:`, (e && e.stack) || e);
+            console.error('[Reset] Check SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / SMTP_FROM in your .env.');
             // fall through to logging so a mail outage doesn't fully break resets
         }
+    } else {
+        // SMTP isn't configured at all — this is the #1 reason "forgot password"
+        // seems to do nothing. Say so loudly instead of silently swallowing it.
+        console.warn('[Reset] SMTP is NOT configured — no email can be sent. '
+            + 'Set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM in .env to enable password-reset emails.');
     }
-    if (process.env.NODE_ENV !== 'production') {
-        console.log(`\n[Reset] Password-reset link for ${email}:\n  ${link}\n`);
-    }
+    // Always surface the link in the server log so the flow is usable even
+    // without a mail server (copy it from the console / PM2 logs).
+    console.log(`\n[Reset] Password-reset link for ${email}:\n  ${link}\n`);
 }
 
 // Request a password reset. Always responds success (no account enumeration).
@@ -387,6 +426,71 @@ app.post('/auth/change-password', authenticateToken, async (req, res) => {
     } catch (e) {
         console.error('Change password error:', e.message);
         res.status(500).json({ error: 'Failed to change password' });
+    }
+});
+
+// --- Two-Factor Authentication (Authenticator App / TOTP) ---
+// Enrolment is a two-step handshake so we never enable 2FA on an unverified
+// secret: (1) /setup mints a secret + QR and stores it as *pending* (not yet
+// enabled); (2) /enable turns it on only after the user proves they can read a
+// code from their app. /disable requires a valid code to switch it back off.
+
+// Step 1: create a pending secret and return the QR + otpauth URL to scan.
+app.post('/auth/2fa/totp/setup', authenticateToken, async (req, res) => {
+    try {
+        const user = await store.getUserById(req.user.id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        const secret = totp.generateSecret();
+        // Store as pending — totpEnabled stays false until /enable succeeds.
+        await store.setTwoFactor(req.user.id, { totpSecret: secret, totpEnabled: false });
+        const url = totp.otpauthURL(secret, user.email);
+        let qrDataUrl = null;
+        try { qrDataUrl = await QRCode.toDataURL(url); }
+        catch (e) { console.error('QR generation failed:', e.message); }
+        res.json({ secret, otpauthUrl: url, qrDataUrl });
+    } catch (e) {
+        console.error('2FA setup error:', e.message);
+        res.status(500).json({ error: 'Failed to start 2FA setup' });
+    }
+});
+
+// Step 2: verify the first code and flip 2FA on.
+app.post('/auth/2fa/totp/enable', authenticateToken, async (req, res) => {
+    const { code } = req.body || {};
+    try {
+        const twoFA = await store.getTwoFactor(req.user.id);
+        if (!twoFA || !twoFA.totpSecret) {
+            return res.status(400).json({ error: 'Start setup first' });
+        }
+        if (twoFA.totpEnabled) return res.status(400).json({ error: '2FA is already enabled' });
+        if (!totp.verify(twoFA.totpSecret, code)) {
+            return res.status(400).json({ error: 'Invalid or expired code' });
+        }
+        await store.setTwoFactor(req.user.id, { totpEnabled: true });
+        res.json({ success: true, totpEnabled: true });
+    } catch (e) {
+        console.error('2FA enable error:', e.message);
+        res.status(500).json({ error: 'Failed to enable 2FA' });
+    }
+});
+
+// Turn 2FA off — requires a valid code (or the current password would also be
+// acceptable; we keep it to a code for simplicity).
+app.post('/auth/2fa/totp/disable', authenticateToken, async (req, res) => {
+    const { code } = req.body || {};
+    try {
+        const twoFA = await store.getTwoFactor(req.user.id);
+        if (!twoFA || !twoFA.totpEnabled || !twoFA.totpSecret) {
+            return res.status(400).json({ error: '2FA is not enabled' });
+        }
+        if (!totp.verify(twoFA.totpSecret, code)) {
+            return res.status(400).json({ error: 'Invalid or expired code' });
+        }
+        await store.setTwoFactor(req.user.id, { totpSecret: null, totpEnabled: false });
+        res.json({ success: true, totpEnabled: false });
+    } catch (e) {
+        console.error('2FA disable error:', e.message);
+        res.status(500).json({ error: 'Failed to disable 2FA' });
     }
 });
 

@@ -115,13 +115,22 @@ function firestoreStore() {
             const doc = await users.doc(String(id)).get();
             if (!doc.exists) return null;
             const d = doc.data();
-            const view = { id: doc.id, email: d.email, credits: d.credits, role: d.role || 'user' };
+            const view = { id: doc.id, email: d.email, credits: d.credits, role: d.role || 'user', totpEnabled: !!d.totpEnabled };
             for (const [camel] of PROFILE_FIELDS) view[camel] = d[camel] || '';
             return view;
         },
         async getPasswordById(id) {
             const doc = await users.doc(String(id)).get();
             return doc.exists ? (doc.data().password ?? null) : null;
+        },
+        async getTwoFactor(id) {
+            const doc = await users.doc(String(id)).get();
+            if (!doc.exists) return null;
+            const d = doc.data();
+            return { totpEnabled: !!d.totpEnabled, totpSecret: d.totpSecret || null };
+        },
+        async setTwoFactor(id, fields) {
+            await users.doc(String(id)).update(fields);
         },
         async updateProfile(id, fields) {
             const clean = cleanProfile(fields);

@@ -992,43 +992,83 @@ const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  // 2FA challenge (step 2 of login when the account has an authenticator app)
+  const [tempToken, setTempToken] = useState('');
+  const [code, setCode] = useState('');
   const { login } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError(''); setLoading(true);
     try {
       const data = await apiFetch('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password })
       });
       if (data.error) throw new Error(data.error);
+      // Account has 2FA — show the code prompt instead of logging in.
+      if (data.twoFactorRequired) { setTempToken(data.tempToken); setLoading(false); return; }
       login(data.token, data.user);
       navigate('/dashboard');
     } catch (err) {
-      setError(friendlyError(err));
+      setError(friendlyError(err)); setLoading(false);
+    }
+  };
+
+  const submitCode = async (e) => {
+    e.preventDefault();
+    setError(''); setLoading(true);
+    try {
+      const data = await apiFetch('/auth/2fa/verify', {
+        method: 'POST',
+        body: JSON.stringify({ tempToken, code })
+      });
+      if (data.error) throw new Error(data.error);
+      login(data.token, data.user);
+      navigate('/dashboard');
+    } catch (err) {
+      setError(friendlyError(err)); setLoading(false);
     }
   };
 
   return (
     <AuthShell
       title="Welcome back"
-      subtitle="Log in to your account"
+      subtitle={tempToken ? 'Enter your authenticator code' : 'Log in to your account'}
       error={error}
       brandTitle="Good to see you again."
       brandText="Log in to verify emails, clean your lists and keep your bounce rate low."
-      alt={<>Don't have an account? <Link to="/register">Register</Link></>}
+      alt={tempToken
+        ? <>Changed your mind? <a href="#" onClick={e=>{e.preventDefault(); setTempToken(''); setCode(''); setError('');}}>Back to login</a></>
+        : <>Don't have an account? <Link to="/register">Register</Link></>}
     >
-      <form onSubmit={handleSubmit} className="form-group">
-        <label>Email</label>
-        <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="input-field" placeholder="you@company.com" required />
-        <div className="label-row">
-          <label>Password</label>
-          <Link to="/forgot-password" className="forgot-link">Forgot password?</Link>
-        </div>
-        <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" placeholder="••••••••" required />
-        <button type="submit" className="btn-primary" style={{marginTop:'1rem'}}>Sign In</button>
-      </form>
+      {tempToken ? (
+        <form onSubmit={submitCode} className="form-group">
+          <label>6-digit code</label>
+          <input type="text" inputMode="numeric" maxLength={6} value={code}
+            onChange={e=>setCode(e.target.value.replace(/\D/g, ''))} className="input-field"
+            placeholder="123456" autoFocus required />
+          <p className="muted" style={{fontSize:'0.85rem'}}>Open your authenticator app and enter the current code for BounceCure.</p>
+          <button type="submit" className="btn-primary" style={{marginTop:'1rem'}} disabled={loading || code.length !== 6}>
+            {loading ? <Loader2 className="loader" size={18} /> : null} Verify
+          </button>
+        </form>
+      ) : (
+        <form onSubmit={handleSubmit} className="form-group">
+          <label>Email</label>
+          <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="input-field" placeholder="you@company.com" required />
+          <div className="label-row">
+            <label>Password</label>
+            <Link to="/forgot-password" className="forgot-link">Forgot password?</Link>
+          </div>
+          <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" placeholder="••••••••" required />
+          <button type="submit" className="btn-primary" style={{marginTop:'1rem'}} disabled={loading}>
+            {loading ? <Loader2 className="loader" size={18} /> : null} Sign In
+          </button>
+        </form>
+      )}
     </AuthShell>
   );
 };
@@ -1582,6 +1622,13 @@ const MyAccount = () => {
   const [pwMsg, setPwMsg] = useState('');
   const [pwSaving, setPwSaving] = useState(false);
   const [stats, setStats] = useState(null);
+  // 2FA (authenticator app) enrolment state
+  const [tfEnabled, setTfEnabled] = useState(false);
+  const [tfSetup, setTfSetup] = useState(null);   // {secret, qrDataUrl} while enrolling
+  const [tfCode, setTfCode] = useState('');
+  const [tfBusy, setTfBusy] = useState(false);
+  const [tfErr, setTfErr] = useState('');
+  const [tfDisabling, setTfDisabling] = useState(false);
 
   // Populate the form from the loaded profile.
   useEffect(() => {
@@ -1597,6 +1644,47 @@ const MyAccount = () => {
     refreshUser(); // live credits/role on this page
     apiFetch('/history/stats/overview').then(d => { if (d && !d.error) setStats(d); }).catch(() => {});
   }, [refreshUser]);
+
+  // Reflect the account's 2FA status whenever the user loads/refreshes.
+  useEffect(() => { setTfEnabled(!!user?.totpEnabled); }, [user?.totpEnabled]);
+
+  // 2FA: start enrolment — fetch a secret + QR to display.
+  const startTwoFactor = async () => {
+    setTfErr(''); setTfBusy(true);
+    try {
+      const data = await apiFetch('/auth/2fa/totp/setup', { method: 'POST' });
+      if (data.error) throw new Error(data.error);
+      setTfSetup({ secret: data.secret, qrDataUrl: data.qrDataUrl });
+      setTfCode('');
+    } catch (err) { setTfErr(friendlyError(err)); }
+    setTfBusy(false);
+  };
+
+  // 2FA: verify the first code and turn it on.
+  const enableTwoFactor = async (e) => {
+    e.preventDefault();
+    setTfErr(''); setTfBusy(true);
+    try {
+      const data = await apiFetch('/auth/2fa/totp/enable', { method: 'POST', body: JSON.stringify({ code: tfCode }) });
+      if (data.error) throw new Error(data.error);
+      setTfEnabled(true); setTfSetup(null); setTfCode('');
+      refreshUser();
+    } catch (err) { setTfErr(friendlyError(err)); }
+    setTfBusy(false);
+  };
+
+  // 2FA: turn it off — requires a current code.
+  const disableTwoFactor = async (e) => {
+    e.preventDefault();
+    setTfErr(''); setTfBusy(true);
+    try {
+      const data = await apiFetch('/auth/2fa/totp/disable', { method: 'POST', body: JSON.stringify({ code: tfCode }) });
+      if (data.error) throw new Error(data.error);
+      setTfEnabled(false); setTfDisabling(false); setTfCode('');
+      refreshUser();
+    } catch (err) { setTfErr(friendlyError(err)); }
+    setTfBusy(false);
+  };
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
 
@@ -1700,15 +1788,59 @@ const MyAccount = () => {
 
           <div className="card" style={{padding:'2rem', marginTop:'1.5rem'}}>
             <h3 style={{fontSize:'1.15rem'}}>Two-Factor Authentication (2FA)</h3>
+            {tfErr && <div className="auth-error" style={{marginTop:'0.75rem'}}><AlertCircle size={16}/> {tfErr}</div>}
+
             <div className="twofa-row">
-              <div className="twofa-info"><Smartphone size={16}/> <div><strong>Authenticator App (TOTP)</strong><div className="twofa-status">Status: <span className="badge unknown">Disabled</span></div></div></div>
-              <button className="btn-secondary" onClick={() => alert('Two-factor authentication is coming soon.')}>Enable Now</button>
+              <div className="twofa-info"><Smartphone size={16}/> <div><strong>Authenticator App (TOTP)</strong>
+                <div className="twofa-status">Status: <span className={`badge ${tfEnabled ? 'valid' : 'unknown'}`}>{tfEnabled ? 'Enabled' : 'Disabled'}</span></div></div></div>
+              {!tfEnabled && !tfSetup && (
+                <button className="btn-secondary" onClick={startTwoFactor} disabled={tfBusy}>
+                  {tfBusy ? <Loader2 className="loader" size={16}/> : null} Enable Now
+                </button>
+              )}
+              {tfEnabled && !tfDisabling && (
+                <button className="btn-secondary" onClick={() => { setTfDisabling(true); setTfCode(''); setTfErr(''); }}>Disable</button>
+              )}
             </div>
-            <div className="twofa-row">
-              <div className="twofa-info"><MailCheck size={16}/> <div><strong>Email 2FA Authentication</strong><div className="twofa-status">Status: <span className="badge unknown">Disabled</span></div></div></div>
-              <button className="btn-secondary" onClick={() => alert('Two-factor authentication is coming soon.')}>Enable Now</button>
-            </div>
-            <p className="muted" style={{marginTop:'0.5rem', fontSize:'0.8rem'}}>2FA is coming soon.</p>
+
+            {/* Enrolment flow: scan QR / enter secret, then confirm a code */}
+            {tfSetup && !tfEnabled && (
+              <form onSubmit={enableTwoFactor} className="twofa-setup">
+                <p className="muted" style={{fontSize:'0.85rem'}}>
+                  1. Scan this QR code with Google Authenticator, Authy, or any TOTP app
+                  (or enter the key manually). 2. Type the 6-digit code it shows to finish.
+                </p>
+                {tfSetup.qrDataUrl && <img src={tfSetup.qrDataUrl} alt="2FA QR code" className="twofa-qr" />}
+                <div className="twofa-secret">Manual key: <code>{tfSetup.secret}</code></div>
+                <input className="input-field" inputMode="numeric" maxLength={6} placeholder="123456"
+                  value={tfCode} onChange={e => setTfCode(e.target.value.replace(/\D/g, ''))} />
+                <div style={{display:'flex', gap:'0.5rem', marginTop:'0.5rem'}}>
+                  <button type="submit" className="btn-primary" disabled={tfBusy || tfCode.length !== 6}>
+                    {tfBusy ? <Loader2 className="loader" size={16}/> : null} Verify &amp; Enable
+                  </button>
+                  <button type="button" className="btn-secondary" onClick={() => { setTfSetup(null); setTfErr(''); }}>Cancel</button>
+                </div>
+              </form>
+            )}
+
+            {/* Disable flow: require a current code */}
+            {tfEnabled && tfDisabling && (
+              <form onSubmit={disableTwoFactor} className="twofa-setup">
+                <p className="muted" style={{fontSize:'0.85rem'}}>Enter a current code from your authenticator app to turn 2FA off.</p>
+                <input className="input-field" inputMode="numeric" maxLength={6} placeholder="123456"
+                  value={tfCode} onChange={e => setTfCode(e.target.value.replace(/\D/g, ''))} />
+                <div style={{display:'flex', gap:'0.5rem', marginTop:'0.5rem'}}>
+                  <button type="submit" className="btn-primary" disabled={tfBusy || tfCode.length !== 6}>
+                    {tfBusy ? <Loader2 className="loader" size={16}/> : null} Confirm Disable
+                  </button>
+                  <button type="button" className="btn-secondary" onClick={() => { setTfDisabling(false); setTfErr(''); }}>Cancel</button>
+                </div>
+              </form>
+            )}
+
+            <p className="muted" style={{marginTop:'0.75rem', fontSize:'0.8rem'}}>
+              Protect your account with a time-based code from an authenticator app.
+            </p>
           </div>
 
           <div className="card" style={{padding:'2rem', marginTop:'1.5rem'}}>
