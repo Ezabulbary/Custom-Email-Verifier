@@ -892,12 +892,18 @@ app.get('/history/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// Delete one of the logged-in user's own batches. Scoped to req.user.id, so a
-// user can only ever delete their own history (never someone else's).
+// Delete one of the logged-in user's own batches. SUPERADMIN ONLY — deleting
+// history is a privileged action, so a plain user or admin cannot do it (checked
+// server-side against the live role, not just hidden in the UI). Still scoped to
+// req.user.id, so it only ever removes the caller's own batch.
 app.delete('/history/:id', authenticateToken, async (req, res) => {
     const id = (req.params.id == null ? '' : String(req.params.id)).trim();
     if (!id) return res.status(400).json({ error: 'Invalid batch id' });
     try {
+        const role = await store.getRoleById(req.user.id);
+        if (role !== 'superadmin') {
+            return res.status(403).json({ error: 'Only a super admin can delete tasks.' });
+        }
         const removed = await store.deleteBatch(req.user.id, id);
         if (!removed) return res.status(404).json({ error: 'Batch not found' });
         res.json({ success: true });

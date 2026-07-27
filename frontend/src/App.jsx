@@ -2036,6 +2036,8 @@ const GDPR = () => (
 const PAGE_SIZE = 10;
 
 const TasksResults = () => {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'superadmin';
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -2159,10 +2161,12 @@ const TasksResults = () => {
                               {busy === b.id ? <Loader2 className="loader" size={14}/> : <Download size={14}/>} Download
                             </button>
                           )}
-                          <button className="icon-btn danger" title="Delete this batch"
-                            onClick={(e) => { e.stopPropagation(); remove(b); }}>
-                            <Trash2 size={15}/>
-                          </button>
+                          {isSuperAdmin && (
+                            <button className="icon-btn danger" title="Delete this batch (super admin)"
+                              onClick={(e) => { e.stopPropagation(); remove(b); }}>
+                              <Trash2 size={15}/>
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

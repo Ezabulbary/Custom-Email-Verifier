@@ -58,9 +58,11 @@ the Firestore path. **Fix:** email validation now rejects `/` (and whitespace/
   file is always removed.
 - Static file serving uses `express.static` + a fixed `index.html` fallback —
   no path traversal.
-- History (`/history/:id`, delete, job status) is scoped to the owner; a user
-  cannot read or delete another user's data. Admin endpoints hide superadmins
-  from plain admins and block self role-change / self-delete.
+- History (`/history/:id`, job status) is scoped to the owner; a user cannot
+  read another user's data. Deleting a task is SUPERADMIN ONLY (enforced
+  server-side against the live role, not just hidden in the UI) and still
+  owner-scoped. Admin endpoints hide superadmins from plain admins and block
+  self role-change / self-delete.
 - Password reset is constant-response (no account enumeration); reset tokens are
   SHA-256 hashed, single-use, 1-hour TTL.
 - Firestore access uses typed `.doc()/.where()` — no query injection; client
