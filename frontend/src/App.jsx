@@ -1180,9 +1180,19 @@ const Register = () => {
   );
 };
 
+const PAGE_TITLES = {
+  '/dashboard': 'Overview',
+  '/dashboard/verify': 'Email Verification',
+  '/dashboard/bounce': 'Bounce Rate',
+  '/dashboard/tasks': 'Tasks & Results',
+  '/dashboard/account': 'My Account',
+  '/admin': 'Admin Panel',
+};
+
 const DashboardLayout = ({ children }) => {
   const { user } = useAuth();
   const location = useLocation();
+  const pageTitle = PAGE_TITLES[location.pathname] || '';
 
   return (
     <div className="dashboard-container animate-fade-in">
@@ -1205,6 +1215,7 @@ const DashboardLayout = ({ children }) => {
       </div>
       <div className="main-content">
         <div className="top-header">
+          <div className="top-header-title">{pageTitle}</div>
           <ProfileMenu />
         </div>
         <div className="page-content">
@@ -1288,8 +1299,7 @@ const EmailVerification = () => {
 
   return (
     <div>
-      <div className="page-title">Email Verification</div>
-      <p className="muted" style={{ marginTop: '-0.5rem', marginBottom: '1.5rem' }}>
+      <p className="muted" style={{ marginTop: '0', marginBottom: '1.5rem' }}>
         Verify a single address, paste a list, or upload a file — all in one place.
       </p>
 
@@ -1397,8 +1407,7 @@ const BounceChecker = () => {
 
   return (
     <div>
-      <div className="page-title">Bounce Rate Checker</div>
-      <p className="muted" style={{ marginTop: '-0.5rem', marginBottom: '1.5rem' }}>
+      <p className="muted" style={{ marginTop: '0', marginBottom: '1.5rem' }}>
         Upload any list (CSV or TXT) for a fast, <strong>free</strong> bounce-rate estimate — no credits used.
         This is a quick domain-level check (syntax + mail-server); for mailbox-level accuracy use Email Verification.
       </p>
@@ -1518,7 +1527,6 @@ const DashboardHome = () => {
 
   return (
     <div>
-      <div className="page-title">Overview</div>
       <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:'1.5rem'}}>
         <StatCard label="Available Credits" value={(user?.credits ?? 0).toLocaleString()} accent="var(--accent-color)" />
         <StatCard label="Emails Verified (30d)" value={totalEmails.toLocaleString()} />
@@ -1627,8 +1635,7 @@ const MyAccount = () => {
 
   return (
     <div>
-      <div className="page-title">Profile Settings</div>
-      <p style={{color:'var(--text-secondary)', marginTop:'-0.5rem', marginBottom:'1.25rem'}}>
+      <p style={{color:'var(--text-secondary)', marginTop:'0', marginBottom:'1.25rem'}}>
         Add or change information of your account. Only you can see this.
       </p>
 
@@ -1944,8 +1951,7 @@ const TasksResults = () => {
 
   return (
     <div>
-      <div className="page-title">Tasks &amp; Results</div>
-      <p style={{color:'var(--text-secondary)', marginTop:'-0.5rem', marginBottom:'1.25rem'}}>
+      <p style={{color:'var(--text-secondary)', marginTop:'0', marginBottom:'1.25rem'}}>
         Every single, bulk and CSV verification is stored as a numbered batch and kept for {retentionDays} days.
       </p>
 
@@ -2092,7 +2098,6 @@ const AdminPanel = () => {
 
   return (
     <div>
-      <div className="page-title"><ShieldCheck size={22} style={{verticalAlign:'-4px', marginRight:'0.4rem'}} color="var(--accent-color)"/> Admin Panel</div>
 
       <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:'1.25rem', marginBottom:'1.5rem'}}>
         <StatCard label="Total Users" value={stats?.total_users ?? '—'} accent="var(--accent-color)" />

@@ -950,3 +950,7 @@
   .addr-row1 { grid-template-columns: 1fr; }
 }
 select.input-field { appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%2364748b' stroke-width='2'><path d='M4 6l4 4 4-4'/></svg>"); background-repeat: no-repeat; background-position: right 0.75rem center; padding-right: 2rem; }
+
+/* --- Top bar page title --- */
+.top-header { justify-content: space-between; }
+.top-header-title { font-size: 1.15rem; font-weight: 700; color: var(--text-primary); }
