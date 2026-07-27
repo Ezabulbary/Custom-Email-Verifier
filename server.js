@@ -732,7 +732,32 @@ app.post('/verify/bulk', authenticateToken, async (req, res) => {
 // is the full original row (as an object keyed by header) for emails[i], so the
 // downloaded results can include all original columns + the verdict.
 const CSV_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-function parseCsvRows(buf) {
+
+// Read the column-mapping choices the frontend modal sends as multipart fields.
+// All are optional; when absent the parser auto-detects (legacy behaviour).
+//   emailCol : index of the email column (-1 = auto-detect)
+//   hasHeader: 'yes' | 'no' | 'auto'  (does the first row contain labels?)
+//   dedupe   : remove duplicate emails? (default true)
+//   labels   : JSON array of per-column names to use in the exported output
+function csvOptsFromBody(body = {}) {
+    const rawCol = body.emailCol;
+    let emailCol = -1;
+    if (rawCol !== undefined && rawCol !== null && String(rawCol).trim() !== '') {
+        const n = parseInt(rawCol, 10);
+        if (!Number.isNaN(n)) emailCol = n;
+    }
+    const hasHeader = body.hasHeader === 'yes' ? 'yes' : body.hasHeader === 'no' ? 'no' : 'auto';
+    const dedupe = !(body.dedupe === '0' || body.dedupe === 'false' || body.dedupe === false);
+    let labels = null;
+    if (body.labels) {
+        try { const p = JSON.parse(body.labels); if (Array.isArray(p)) labels = p.map(x => (x == null ? '' : String(x))); }
+        catch { /* ignore malformed labels */ }
+    }
+    return { emailCol, hasHeader, dedupe, labels };
+}
+
+function parseCsvRows(buf, opts = {}) {
+    const { emailCol: wantCol = -1, hasHeader = 'auto', dedupe = true, labels = null } = opts;
     const content = buf.toString('utf8').replace(/^﻿/, ''); // strip BOM
     const firstLine = content.split(/\r?\n/).find(l => l.trim()) || '';
     const occ = (ch) => firstLine.split(ch).length - 1;
@@ -753,22 +778,33 @@ function parseCsvRows(buf) {
     const width = Math.max(...records.map(r => r.length));
     const rowHasEmail = (r) => r.some(c => CSV_EMAIL_RE.test(String(c || '').trim()));
 
-    // Header row = a first row that has NO email while later rows do.
+    // Header row: honour the modal's explicit yes/no; otherwise auto-detect
+    // (a first row with NO email while later rows have one).
     let headerRow = null, dataStart = 0;
-    if (!rowHasEmail(records[0]) && records.slice(1, 6).some(rowHasEmail)) {
+    if (hasHeader === 'yes') {
+        headerRow = records[0]; dataStart = 1;
+    } else if (hasHeader === 'no') {
+        headerRow = null; dataStart = 0;
+    } else if (!rowHasEmail(records[0]) && records.slice(1, 6).some(rowHasEmail)) {
         headerRow = records[0]; dataStart = 1;
     }
+
+    // Column names for the exported output: explicit modal labels win, then the
+    // file's own header, then a generic "Column N".
     const headers = [];
     for (let c = 0; c < width; c++) {
-        const h = headerRow && headerRow[c] != null ? String(headerRow[c]).trim() : '';
-        headers.push(h || `Column ${c + 1}`);
+        const label = labels && labels[c] != null ? String(labels[c]).trim() : '';
+        const fromFile = headerRow && headerRow[c] != null ? String(headerRow[c]).trim() : '';
+        headers.push(label || fromFile || `Column ${c + 1}`);
     }
 
-    // Which column holds emails (scan sample values).
-    let emailCol = -1;
-    const sample = records.slice(dataStart, dataStart + 25);
-    for (let c = 0; c < width; c++) {
-        if (sample.some(r => CSV_EMAIL_RE.test(String(r[c] || '').trim()))) { emailCol = c; break; }
+    // Which column holds emails: explicit modal choice wins, else scan samples.
+    let emailCol = (Number.isInteger(wantCol) && wantCol >= 0 && wantCol < width) ? wantCol : -1;
+    if (emailCol === -1) {
+        const sample = records.slice(dataStart, dataStart + 25);
+        for (let c = 0; c < width; c++) {
+            if (sample.some(r => CSV_EMAIL_RE.test(String(r[c] || '').trim()))) { emailCol = c; break; }
+        }
     }
 
     const emails = [], sources = [], seen = new Set();
@@ -781,8 +817,10 @@ function parseCsvRows(buf) {
         }
         if (!CSV_EMAIL_RE.test(email)) continue;
         const key = email.toLowerCase();
-        if (seen.has(key)) continue;      // de-duplicate
-        seen.add(key);
+        if (dedupe) {
+            if (seen.has(key)) continue;      // de-duplicate
+            seen.add(key);
+        }
         const source = {};
         for (let c = 0; c < width; c++) source[headers[c]] = r[c] != null ? String(r[c]) : '';
         emails.push(key);
@@ -797,7 +835,7 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), async (req, re
 
     let parsed = { emails: [], sources: [] };
     try {
-        parsed = parseCsvRows(fs.readFileSync(req.file.path));
+        parsed = parseCsvRows(fs.readFileSync(req.file.path), csvOptsFromBody(req.body));
     } catch (e) {
         console.error('CSV parse error:', e.message);
     } finally {
@@ -815,16 +853,18 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), async (req, re
     }
 });
 
-// --- Bounce Rate check (FREE + FAST) ---
-// Domain-level estimate: syntax + disposable + MX only (no SMTP), so it does NOT
-// consume credits and returns quickly. Same job/progress mechanism as CSV.
+// --- Bounce Rate check (FREE) ---
+// Runs the SAME real mailbox-level verification as paid Email Verification
+// (syntax + disposable + MX + SMTP + catch-all), so the estimate reflects actual
+// deliverability instead of just "does the domain accept mail". It stays FREE —
+// charge:false — and uses the same job/progress mechanism as CSV.
 app.post('/bounce/csv', authenticateToken, upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'A file is required' });
     const name = (req.body.name || '').toString().slice(0, 120) || null;
 
     let parsed = { emails: [], sources: [] };
     try {
-        parsed = parseCsvRows(fs.readFileSync(req.file.path));
+        parsed = parseCsvRows(fs.readFileSync(req.file.path), csvOptsFromBody(req.body));
     } catch (e) {
         console.error('Bounce parse error:', e.message);
     } finally {
@@ -837,7 +877,7 @@ app.post('/bounce/csv', authenticateToken, upload.single('file'), async (req, re
     try {
         await startVerificationJob(req, res, {
             type: 'bounce', emails: parsed.emails, name, sources: parsed.sources,
-            verifyFn: quickVerify, charge: false, concurrency: QUICK_CONCURRENCY,
+            verifyFn: verifyEmail, charge: false,
         });
     } catch (err) {
         console.error('Bounce check error:', err.message);

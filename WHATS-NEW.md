@@ -1,4 +1,27 @@
-# What's New — Reorganization + Cloud Firestore
+# What's New — Fine-grained statuses, column-mapping, real Bounce Rate
+
+Latest update (v26):
+
+- **Fine-grained verification statuses** (idea inspired by Reoon, built for this
+  app): every result now returns one of `safe`, `role`, `catch-all`,
+  `disposable`, `invalid`, `inbox_full`, `disabled`, `spamtrap`, `unknown` —
+  instead of the old coarse valid/invalid. Deliverable mailboxes split into
+  **safe** (personal) vs **role** (support@, info@, …); SMTP replies are parsed
+  to detect **inbox_full** (over quota) and **disabled/suspended** accounts;
+  known spam-trap domains (via `SPAMTRAP_DOMAINS`) return **spamtrap**. Credits
+  are charged for every definitive status (only `unknown` is free/refunded).
+- **Column-mapping modal on file upload**: after picking a CSV/TXT, a popup
+  previews the first rows and lets you map which column is the email, confirm
+  whether the first row is a header, and choose whether to remove duplicate
+  emails — then **Start Verification**. Mapped column labels carry through to the
+  exported results.
+- **Bounce Rate now does real mailbox-level verification** (syntax + MX + SMTP +
+  catch-all), so it reflects actual deliverability instead of only checking the
+  domain. It stays **free** (no credits).
+
+---
+
+# Reorganization + Cloud Firestore
 
 This update reorganizes the tool (inspired by Reoon's dashboard) and adds an
 optional **Cloud Firestore** data store.

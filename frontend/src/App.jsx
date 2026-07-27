@@ -599,8 +599,8 @@ const TESTIMONIALS = [
 ];
 
 const FAQS = [
-  { q: 'What does a verification actually check?', a: 'Every address goes through syntax validation, MX lookup, SMTP mailbox probing, disposable-domain detection and catch-all analysis — returning a status (valid, invalid, catch-all or unknown) and a 0–100 confidence score.' },
-  { q: 'What do the statuses mean?', a: 'Valid = the mailbox exists and can receive mail. Invalid = it does not exist or the domain rejects mail. Catch-all = the domain accepts every address, so we return a confidence score instead of a guarantee. Unknown = the server did not give a definitive answer (greylisting, timeouts).' },
+  { q: 'What does a verification actually check?', a: 'Every address goes through syntax validation, MX lookup, SMTP mailbox probing, disposable-domain detection and catch-all analysis — returning a precise status and a 0–100 confidence score.' },
+  { q: 'What do the statuses mean?', a: 'Safe = a real, deliverable mailbox (usually personal). Role = deliverable, but a group address like support@ or info@. Catch-all = the domain accepts every address, so we return a confidence score instead of a guarantee. Disposable = a temporary/throwaway provider. Invalid = it does not exist or the domain rejects mail. Inbox Full = the mailbox exists but is over quota. Disabled = the account existed but was disabled/suspended. Spamtrap = an address used to catch spammers — never send to it. Unknown = the server did not give a definitive answer (greylisting, timeouts).' },
   { q: 'How accurate is BounceCure?', a: 'For domains that expose a mailbox, accuracy is typically 98–99%. Catch-all and unknown results reflect genuine limits of the SMTP protocol — no verifier can be 100% certain on those, which is exactly why we return a confidence score rather than a false “valid”.' },
   { q: 'How do you handle catch-all domains?', a: 'We send multiple probes and compare the server responses, and for Microsoft 365 tenants we run a deep mailbox check — so even accept-all domains get a meaningful confidence score instead of a blind “valid”.' },
   { q: 'Will verifying send an email to the address?', a: 'No. We talk to the mail server up to the point of checking the mailbox and then disconnect before any message is sent. Recipients never receive anything.' },
@@ -1286,6 +1286,164 @@ const DashboardLayout = ({ children }) => {
 
 // One unified verification page (Reoon-style): single email, paste-a-list, and
 // CSV/TXT upload — all in one place.
+// ---------------------------------------------------------------------------
+// Column-mapping modal — shown after a file is picked, so the user can confirm
+// which column holds the email, whether the first row is a header, and whether
+// duplicates should be removed, before verification starts. Idea inspired by
+// list-upload mappers (Reoon etc.), built for this app's own flow.
+// ---------------------------------------------------------------------------
+const EMAIL_RE_C = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const FIELD_OPTIONS = ['Custom', 'Email', 'First Name', 'Last Name', 'Full Name', 'Company', 'Title', 'Phone'];
+
+function guessField(header) {
+  const h = String(header || '').toLowerCase();
+  if (/e-?mail/.test(h)) return 'Email';
+  if (/(first.?name|fname|given)/.test(h)) return 'First Name';
+  if (/(last.?name|lname|surname|family)/.test(h)) return 'Last Name';
+  if (/(full.?name|^name$)/.test(h)) return 'Full Name';
+  if (/(company|organi[sz]ation|employer|account)/.test(h)) return 'Company';
+  if (/(title|position|role|job)/.test(h)) return 'Title';
+  if (/(phone|mobile|tel)/.test(h)) return 'Phone';
+  return 'Custom';
+}
+
+// Small client-side CSV/TSV reader for the PREVIEW only (the server re-parses
+// the real file). Handles quoted fields, escaped quotes, and , ; \t delimiters.
+function parseCsvClient(text, maxRows = 8) {
+  text = String(text || '').replace(/^\uFEFF/, '');
+  const firstLine = text.split(/\r?\n/).find(l => l.trim()) || '';
+  const occ = (ch) => firstLine.split(ch).length - 1;
+  const delim = occ('\t') > occ(',') && occ('\t') > occ(';') ? '\t' : occ(';') > occ(',') ? ';' : ',';
+
+  const rows = [];
+  let field = '', row = [], inQuotes = false;
+  const pushRow = () => { row.push(field); field = ''; if (row.some(c => String(c).trim() !== '')) rows.push(row); row = []; };
+  for (let i = 0; i < text.length && rows.length < maxRows; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += ch;
+    } else if (ch === '"') inQuotes = true;
+    else if (ch === delim) { row.push(field); field = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; pushRow(); }
+    else field += ch;
+  }
+  if (rows.length < maxRows && (field !== '' || row.length)) pushRow();
+  return rows;
+}
+
+const ColumnMapModal = ({ file, ctaLabel = 'Start Verification', onCancel, onStart }) => {
+  const [rows, setRows] = useState(null);
+  const [width, setWidth] = useState(0);
+  const [labels, setLabels] = useState([]);
+  const [hasHeader, setHasHeader] = useState(true);
+  const [dedupe, setDedupe] = useState(true);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    if (!file) return;
+    let cancelled = false;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (cancelled) return;
+      const parsed = parseCsvClient(String(reader.result || ''), 8);
+      if (!parsed.length) { setErr('The file looks empty or unreadable.'); setRows([]); return; }
+      const w = parsed.reduce((m, r) => Math.max(m, r.length), 0);
+      const rowHasEmail = (r) => r.some(c => EMAIL_RE_C.test(String(c || '').trim()));
+      const detectedHeader = parsed.length > 1 && !rowHasEmail(parsed[0]) && parsed.slice(1).some(rowHasEmail);
+      const dataRows = detectedHeader ? parsed.slice(1) : parsed;
+      let emailCol = -1;
+      for (let c = 0; c < w; c++) {
+        if (dataRows.some(r => EMAIL_RE_C.test(String(r[c] || '').trim()))) { emailCol = c; break; }
+      }
+      const lbls = [];
+      for (let c = 0; c < w; c++) {
+        if (c === emailCol) lbls.push('Email');
+        else lbls.push(detectedHeader ? guessField(parsed[0][c]) : 'Custom');
+      }
+      setRows(parsed); setWidth(w); setLabels(lbls); setHasHeader(detectedHeader); setErr('');
+    };
+    reader.onerror = () => { if (!cancelled) { setErr('Could not read the file.'); setRows([]); } };
+    reader.readAsText(file);
+    return () => { cancelled = true; };
+  }, [file]);
+
+  const setLabel = (c, v) => setLabels(prev => {
+    const next = prev.slice();
+    if (v === 'Email') for (let i = 0; i < next.length; i++) if (next[i] === 'Email') next[i] = 'Custom';
+    next[c] = v;
+    return next;
+  });
+
+  const start = () => {
+    const emailCol = labels.indexOf('Email');
+    if (emailCol === -1) { setErr('Please choose which column contains the email address.'); return; }
+    onStart({ emailCol, hasHeader: hasHeader ? 'yes' : 'no', dedupe, labels });
+  };
+
+  const previewRows = rows ? (hasHeader ? rows.slice(1) : rows) : [];
+  const cols = Array.from({ length: width }, (_, c) => c);
+
+  return (
+    <div className="colmap-overlay" onClick={onCancel}>
+      <div className="colmap-modal" onClick={e => e.stopPropagation()}>
+        <button className="colmap-close" onClick={onCancel} aria-label="Close"><X size={18} /></button>
+        <h2 className="colmap-title">Match the columns in your file</h2>
+        <p className="colmap-sub">Displaying the first few rows of your file:</p>
+        <p className="colmap-file">{file?.name}</p>
+
+        {!rows && !err && <p className="muted" style={{ textAlign: 'center', padding: '2rem' }}><Loader2 className="loader" size={18} /> Reading file…</p>}
+        {err && <p className="colmap-err">{err}</p>}
+
+        {rows && width > 0 && (
+          <>
+            <div className="colmap-tablewrap">
+              <table className="colmap-table">
+                <thead>
+                  <tr>
+                    {cols.map(c => (
+                      <th key={c}>
+                        <select className="colmap-select" value={labels[c] || 'Custom'} onChange={e => setLabel(c, e.target.value)}>
+                          {FIELD_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {previewRows.slice(0, 6).map((r, ri) => (
+                    <tr key={ri}>
+                      {cols.map(c => <td key={c}>{r[c] != null ? String(r[c]) : ''}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="colmap-conditions">
+              <div className="colmap-cond">
+                <span>Does your first row contain labels?</span>
+                <label className="colmap-radio"><input type="radio" checked={hasHeader} onChange={() => setHasHeader(true)} /> Yes</label>
+                <label className="colmap-radio"><input type="radio" checked={!hasHeader} onChange={() => setHasHeader(false)} /> No</label>
+              </div>
+              <p className="colmap-hint">If your file has a header on the first populated row, we'll skip it.</p>
+              <div className="colmap-cond">
+                <span>Can we remove duplicate emails?</span>
+                <label className="colmap-radio"><input type="radio" checked={dedupe} onChange={() => setDedupe(true)} /> Yes</label>
+                <label className="colmap-radio"><input type="radio" checked={!dedupe} onChange={() => setDedupe(false)} /> No</label>
+              </div>
+            </div>
+
+            <div className="colmap-actions">
+              <button className="btn-primary" onClick={start}>{ctaLabel}</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const EmailVerification = () => {
   const { refreshUser } = useAuth();
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -1303,7 +1461,10 @@ const EmailVerification = () => {
   const [csvName, setCsvName] = useState('');
   const [file, setFile] = useState(null);
   const [csvLoading, setCsvLoading] = useState(false);
+  const [showMap, setShowMap] = useState(false);
   const fileInputRef = useRef(null);
+
+  const pickFile = (f) => { if (f) { setFile(f); setShowMap(true); } };
 
   const verifySingle = async (e) => {
     e.preventDefault();
@@ -1345,13 +1506,20 @@ const EmailVerification = () => {
     );
   };
 
-  const verifyCsv = () => {
+  const verifyCsv = (opts) => {
     if (!file) return;
     const fd = new FormData();
     fd.append('file', file);
-    if (csvName.trim()) fd.append('name', csvName.trim());
+    const nm = ((opts && opts.name) || csvName || '').trim();
+    if (nm) fd.append('name', nm);
+    if (opts) {
+      fd.append('emailCol', String(opts.emailCol));
+      fd.append('hasHeader', opts.hasHeader);
+      fd.append('dedupe', opts.dedupe ? '1' : '0');
+      fd.append('labels', JSON.stringify(opts.labels || []));
+    }
     runJob(() => apiFetch('/verify/csv', { method: 'POST', body: fd }), 0, setCsvLoading, 'File results')
-      .then(() => setFile(null));
+      .then(() => { setFile(null); setShowMap(false); });
   };
 
   return (
@@ -1399,18 +1567,27 @@ const EmailVerification = () => {
             onClick={() => fileInputRef.current.click()}
             onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }}
             onDragLeave={(e) => e.currentTarget.classList.remove('drag-over')}
-            onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove('drag-over'); if (e.dataTransfer.files && e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); }}
+            onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove('drag-over'); if (e.dataTransfer.files && e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]); }}
           >
-            <input type="file" accept=".csv,.txt" ref={fileInputRef} onChange={e => setFile(e.target.files[0])} style={{ display: 'none' }} />
+            <input type="file" accept=".csv,.txt" ref={fileInputRef} onChange={e => { pickFile(e.target.files[0]); e.target.value = ''; }} style={{ display: 'none' }} />
             <Upload size={40} color="var(--accent-color)" />
             <p style={{ fontWeight: 500, margin: '0.5rem 0 0.25rem' }}>{file ? file.name : 'Drag & drop, or click to browse'}</p>
             <span className="muted-inline">CSV (any columns) or TXT (one email per line)</span>
           </div>
-          <button onClick={verifyCsv} className="btn-primary" disabled={!file || csvLoading} style={{ marginTop: '1rem' }}>
+          <button onClick={() => file && setShowMap(true)} className="btn-primary" disabled={!file || csvLoading} style={{ marginTop: '1rem' }}>
             {csvLoading ? <Loader2 className="loader" size={18} /> : <Upload size={18} />} Start Verification
           </button>
         </div>
       </div>
+
+      {showMap && file && (
+        <ColumnMapModal
+          file={file}
+          ctaLabel="Start Verification"
+          onCancel={() => setShowMap(false)}
+          onStart={(opts) => { setShowMap(false); verifyCsv(opts); }}
+        />
+      )}
 
       {progress && <JobProgress processed={progress.processed} total={progress.total} />}
       {results.length > 0 && <ResultsTable results={results} title={resultsTitle} />}
@@ -1427,12 +1604,23 @@ const BounceChecker = () => {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(null);
   const [results, setResults] = useState(null);
+  const [showMap, setShowMap] = useState(false);
   const fileInputRef = useRef(null);
 
-  const run = async () => {
+  const pickFile = (f) => { if (f) { setFile(f); setShowMap(true); } };
+
+  const run = async (opts) => {
     if (!file) return;
     const fd = new FormData();
     fd.append('file', file);
+    if (opts) {
+      fd.append('emailCol', String(opts.emailCol));
+      fd.append('hasHeader', opts.hasHeader);
+      fd.append('dedupe', opts.dedupe ? '1' : '0');
+      fd.append('labels', JSON.stringify(opts.labels || []));
+      if (opts.name) fd.append('name', opts.name);
+    }
+    setShowMap(false);
     setLoading(true); setResults(null); setProgress({ processed: 0, total: 0 });
     try {
       const job = await apiFetch('/bounce/csv', { method: 'POST', body: fd });
@@ -1468,8 +1656,9 @@ const BounceChecker = () => {
   return (
     <div>
       <p className="muted" style={{ marginTop: '0', marginBottom: '1.5rem' }}>
-        Upload any list (CSV or TXT) for a fast, <strong>free</strong> bounce-rate estimate — no credits used.
-        This is a quick domain-level check (syntax + mail-server); for mailbox-level accuracy use Email Verification.
+        Upload any list (CSV or TXT) for a <strong>free</strong> bounce-rate check — no credits used.
+        This runs the same real mailbox-level verification (syntax + mail-server + SMTP + catch-all) as Email Verification,
+        so the estimate reflects actual deliverability.
       </p>
 
       <div className="card" style={{ padding: '1.75rem', maxWidth: 640 }}>
@@ -1478,18 +1667,27 @@ const BounceChecker = () => {
           onClick={() => fileInputRef.current.click()}
           onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }}
           onDragLeave={(e) => e.currentTarget.classList.remove('drag-over')}
-          onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove('drag-over'); if (e.dataTransfer.files && e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); }}
+          onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove('drag-over'); if (e.dataTransfer.files && e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]); }}
         >
-          <input type="file" accept=".csv,.txt" ref={fileInputRef} onChange={e => setFile(e.target.files[0])} style={{ display: 'none' }} />
+          <input type="file" accept=".csv,.txt" ref={fileInputRef} onChange={e => { pickFile(e.target.files[0]); e.target.value = ''; }} style={{ display: 'none' }} />
           <Upload size={40} color="var(--accent-color)" />
           <p style={{ fontWeight: 500, margin: '0.5rem 0 0.25rem' }}>{file ? file.name : 'Drag & drop, or click to browse'}</p>
           <span className="muted-inline">CSV (any columns) or TXT (one email per line)</span>
         </div>
-        <button onClick={run} className="btn-primary" disabled={!file || loading} style={{ marginTop: '1rem' }}>
+        <button onClick={() => file && setShowMap(true)} className="btn-primary" disabled={!file || loading} style={{ marginTop: '1rem' }}>
           {loading ? <Loader2 className="loader" size={18} /> : <AlertCircle size={18} />} Check Bounce Rate
         </button>
         {progress && <JobProgress processed={progress.processed} total={progress.total} />}
       </div>
+
+      {showMap && file && (
+        <ColumnMapModal
+          file={file}
+          ctaLabel="Check Bounce Rate"
+          onCancel={() => setShowMap(false)}
+          onStart={(opts) => run(opts)}
+        />
+      )}
 
       {summary && (
         <div className="card bounce-hero" style={{ marginTop: '1.5rem' }}>
