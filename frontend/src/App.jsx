@@ -1368,7 +1368,7 @@ const BounceChecker = () => {
     fd.append('file', file);
     setLoading(true); setResults(null); setProgress({ processed: 0, total: 0 });
     try {
-      const job = await apiFetch('/verify/csv', { method: 'POST', body: fd });
+      const job = await apiFetch('/bounce/csv', { method: 'POST', body: fd });
       if (job.error) throw new Error(job.error);
       setProgress({ processed: 0, total: job.total });
       const done = await pollJob(job.jobId, (p, t) => setProgress({ processed: p, total: t }));
@@ -1399,7 +1399,8 @@ const BounceChecker = () => {
     <div>
       <div className="page-title">Bounce Rate Checker</div>
       <p className="muted" style={{ marginTop: '-0.5rem', marginBottom: '1.5rem' }}>
-        Upload any list (CSV or TXT) and get its estimated bounce rate and deliverability breakdown.
+        Upload any list (CSV or TXT) for a fast, <strong>free</strong> bounce-rate estimate — no credits used.
+        This is a quick domain-level check (syntax + mail-server); for mailbox-level accuracy use Email Verification.
       </p>
 
       <div className="card" style={{ padding: '1.75rem', maxWidth: 640 }}>

@@ -20,7 +20,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const { fetchDomains } = require('./disposable');
-const { verifyEmail } = require('./verifier');
+const { verifyEmail, quickVerify } = require('./verifier');
 const { isGoogleEnabled, verifyIdToken } = require('./firebaseAdmin');
 const { isEmailEnabled, sendResetEmail } = require('./mailer');
 const store = require('./store');
@@ -490,12 +490,16 @@ const jobs = new Map();
 let jobSeq = 0;
 const makeJobId = () => `job_${jobSeq++}_${Math.round(process.hrtime()[1])}`;
 
+// Fast domain-level bounce checks run at higher concurrency (DNS only, no SMTP).
+const QUICK_CONCURRENCY = Math.max(1, parseInt(process.env.QUICK_CONCURRENCY, 10) || 50);
+
 async function runJob(job) {
     try {
+        const verifyFn = job.verifyFn || verifyEmail;
         job.results = await asyncPoolProgress(
-            VERIFY_CONCURRENCY, job.emails,
+            job.concurrency || VERIFY_CONCURRENCY, job.emails,
             async (email, i) => {
-                const r = await verifyEmail(email);
+                const r = await verifyFn(email);
                 // Attach the original CSV row (all its columns) so the download
                 // can include every source column alongside the verdict.
                 if (job.sources && job.sources[i]) r.source = job.sources[i];
@@ -503,13 +507,18 @@ async function runJob(job) {
             },
             () => { job.processed++; }
         );
-        // Charge only for emails that were successfully checked.
-        const charge = chargeableCount(job.results);
-        if (charge > 0) await store.deductCredits(job.userId, charge);
+        // Charge only when this job bills (bounce checks are free) and only for
+        // emails that were successfully checked.
+        if (job.charge) {
+            const charge = chargeableCount(job.results);
+            if (charge > 0) await store.deductCredits(job.userId, charge);
+            job.charged = charge;
+        } else {
+            job.charged = 0;
+        }
         const batch = await saveBatch(job.userId, job.type, job.results, job.name);
         job.batchId = batch && batch.id;
         job.batchNumber = batch && batch.batchNumber;
-        job.charged = charge;
         job.status = 'completed';
     } catch (err) {
         console.error('Job error:', err.message);
@@ -520,17 +529,20 @@ async function runJob(job) {
     setTimeout(() => jobs.delete(job.id), 10 * 60 * 1000);
 }
 
-async function startVerificationJob(req, res, type, emails, name, sources) {
+// opts: { type, emails, name, sources, verifyFn, charge, concurrency }
+async function startVerificationJob(req, res, opts) {
+    const { type, emails, name, sources = null, verifyFn = verifyEmail, charge = true, concurrency } = opts;
     const user = await store.getUserById(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    // Require enough credits for the whole list up front (only successful checks
-    // are actually charged when the job finishes).
-    if (user.credits < emails.length) {
+    // Billing jobs require enough credits up front (only successful checks are
+    // actually charged when the job finishes). Free jobs (bounce) skip this.
+    if (charge && user.credits < emails.length) {
         return res.status(402).json({ error: `Insufficient credits: need ${emails.length}, have ${user.credits}` });
     }
     const job = {
         id: makeJobId(), userId: req.user.id, type, name,
-        emails, sources: sources || null, total: emails.length, processed: 0,
+        emails, sources, verifyFn, charge, concurrency,
+        total: emails.length, processed: 0,
         results: null, status: 'processing', createdAt: Date.now(),
     };
     jobs.set(job.id, job);
@@ -546,7 +558,7 @@ app.post('/verify/bulk', authenticateToken, async (req, res) => {
         return res.status(400).json({ error: 'Array of emails is required' });
     }
     try {
-        await startVerificationJob(req, res, 'bulk', emails, name);
+        await startVerificationJob(req, res, { type: 'bulk', emails, name });
     } catch (err) {
         console.error('Bulk verify error:', err.message);
         res.status(500).json({ error: 'Bulk verification failed' });
@@ -635,10 +647,40 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), async (req, re
         return res.status(400).json({ error: 'No email addresses found in the file. Make sure it has an email column, or one email per line.' });
     }
     try {
-        await startVerificationJob(req, res, 'csv', parsed.emails, name, parsed.sources);
+        await startVerificationJob(req, res, { type: 'csv', emails: parsed.emails, name, sources: parsed.sources });
     } catch (err) {
         console.error('CSV verify error:', err.message);
         res.status(500).json({ error: 'CSV verification failed' });
+    }
+});
+
+// --- Bounce Rate check (FREE + FAST) ---
+// Domain-level estimate: syntax + disposable + MX only (no SMTP), so it does NOT
+// consume credits and returns quickly. Same job/progress mechanism as CSV.
+app.post('/bounce/csv', authenticateToken, upload.single('file'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'A file is required' });
+    const name = (req.body.name || '').toString().slice(0, 120) || null;
+
+    let parsed = { emails: [], sources: [] };
+    try {
+        parsed = parseCsvRows(fs.readFileSync(req.file.path));
+    } catch (e) {
+        console.error('Bounce parse error:', e.message);
+    } finally {
+        fs.unlink(req.file.path, () => {});
+    }
+
+    if (parsed.emails.length === 0) {
+        return res.status(400).json({ error: 'No email addresses found in the file. Make sure it has an email column, or one email per line.' });
+    }
+    try {
+        await startVerificationJob(req, res, {
+            type: 'bounce', emails: parsed.emails, name, sources: parsed.sources,
+            verifyFn: quickVerify, charge: false, concurrency: QUICK_CONCURRENCY,
+        });
+    } catch (err) {
+        console.error('Bounce check error:', err.message);
+        res.status(500).json({ error: 'Bounce check failed' });
     }
 });
 
@@ -815,7 +857,7 @@ app.delete('/admin/users/:id', authenticateToken, requireAdmin, async (req, res)
 // per-path proxy rules to maintain (a missing /history or /admin rule is exactly
 // what makes Tasks & Results fail with "unexpected response HTTP 200"). The API
 // routes above always take precedence; anything else falls back to index.html.
-const API_PREFIX_RE = /^\/(auth|verify|history|admin|health)(\/|$)/;
+const API_PREFIX_RE = /^\/(auth|verify|bounce|history|admin|health)(\/|$)/;
 const DIST_DIR = require('path').join(__dirname, 'frontend', 'dist');
 if (fs.existsSync(DIST_DIR)) {
     app.use(express.static(DIST_DIR));

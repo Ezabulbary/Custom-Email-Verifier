@@ -137,7 +137,7 @@ prefix — a missing one returns index.html (HTTP 200 HTML) and breaks that page
 ```nginx
     root /home/youruser/email-verifier/frontend/dist;
     location / { try_files $uri $uri/ /index.html; }
-    location ~ ^/(auth|verify|history|admin|health) {
+    location ~ ^/(auth|verify|bounce|history|admin|health) {
         proxy_pass http://127.0.0.1:3001;
         proxy_set_header Host $host;
         proxy_read_timeout 300s;

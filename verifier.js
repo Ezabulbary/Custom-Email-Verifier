@@ -257,4 +257,41 @@ async function verifyEmail(email) {
     return result;
 }
 
-module.exports = { verifyEmail };
+// --- Fast, free bounce-rate check (no SMTP, no credits) ---
+// Estimates deliverability at the DOMAIN level: syntax + disposable + MX only.
+// No SMTP handshake (which is the slow part), so it's fast and cheap. MX results
+// are cached per-domain, so lists with repeated domains resolve almost instantly.
+const mxCache = new Map();
+const MX_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+async function domainHasMx(domain) {
+    const hit = mxCache.get(domain);
+    if (hit && Date.now() - hit.ts < MX_CACHE_TTL) return hit.ok;
+    let ok = false;
+    try {
+        const mx = await dnsPromises.resolveMx(domain);
+        ok = Array.isArray(mx) && mx.length > 0;
+    } catch { ok = false; }
+    mxCache.set(domain, { ok, ts: Date.now() });
+    return ok;
+}
+
+async function quickVerify(email) {
+    const result = { email, status: 'unknown', confidence: 0, syntax: false, disposable: false, mxFound: false, reason: '' };
+    if (typeof email !== 'string' || !EMAIL_REGEX.test(email)) {
+        result.status = 'invalid'; result.confidence = 99; result.reason = 'Invalid email syntax'; return result;
+    }
+    result.syntax = true;
+    const domain = email.split('@')[1].toLowerCase();
+    if (isDisposable(domain)) {
+        result.disposable = true; result.status = 'invalid'; result.confidence = 90;
+        result.reason = 'Disposable email provider'; return result;
+    }
+    const ok = await domainHasMx(domain);
+    result.mxFound = ok;
+    if (!ok) { result.status = 'invalid'; result.confidence = 85; result.reason = 'Domain has no mail server (will bounce)'; return result; }
+    result.status = 'valid'; result.confidence = 60; result.reason = 'Domain accepts mail (not mailbox-verified)';
+    return result;
+}
+
+module.exports = { verifyEmail, quickVerify };
