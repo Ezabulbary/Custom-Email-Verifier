@@ -1605,6 +1605,7 @@ const BounceChecker = () => {
   const [progress, setProgress] = useState(null);
   const [results, setResults] = useState(null);
   const [showMap, setShowMap] = useState(false);
+  const [mode, setMode] = useState('fast');
   const fileInputRef = useRef(null);
 
   const pickFile = (f) => { if (f) { setFile(f); setShowMap(true); } };
@@ -1613,6 +1614,7 @@ const BounceChecker = () => {
     if (!file) return;
     const fd = new FormData();
     fd.append('file', file);
+    fd.append('mode', mode);
     if (opts) {
       fd.append('emailCol', String(opts.emailCol));
       fd.append('hasHeader', opts.hasHeader);
@@ -1648,20 +1650,45 @@ const BounceChecker = () => {
       else s.unknown++;
     }
     const pct = (n) => s.total ? Math.round((n / s.total) * 100) : 0;
-    return { ...s, bounceRate: pct(s.invalid), deliverable: pct(s.valid), risky: pct(s.catchAll + s.unknown) };
+    const rawBounce = s.total ? (s.invalid / s.total) * 100 : 0;
+    return { ...s, bounceRate: pct(s.invalid), rawBounce, deliverable: pct(s.valid), risky: pct(s.catchAll + s.unknown) };
   }, [results]);
 
-  const bounceColor = summary ? (summary.bounceRate <= 3 ? '#059669' : summary.bounceRate <= 10 ? '#d97706' : '#dc2626') : '#64748b';
+  const bounceColor = summary ? (summary.rawBounce < 3 ? '#059669' : summary.rawBounce <= 10 ? '#d97706' : '#dc2626') : '#64748b';
+
+  // NeverBounce-style headline label + friendly verdict message.
+  const bounceLabel = !summary ? '' : summary.invalid === 0 ? '0%' : summary.rawBounce < 1 ? 'Less than 1%' : `${Math.round(summary.rawBounce)}%`;
+  const verdict = !summary ? null
+    : summary.rawBounce < 3 ? { msg: 'Congrats! This list may not require cleaning.', color: '#059669' }
+    : summary.rawBounce <= 8 ? { msg: 'Looks decent — a light clean-up could lower your bounce rate.', color: '#d97706' }
+    : summary.rawBounce <= 20 ? { msg: 'Consider cleaning this list before your next send.', color: '#d97706' }
+    : { msg: 'This list needs cleaning to protect your sender reputation.', color: '#dc2626' };
 
   return (
     <div>
       <p className="muted" style={{ marginTop: '0', marginBottom: '1.5rem' }}>
-        Upload any list (CSV or TXT) for a <strong>free</strong> bounce-rate check — no credits used.
-        This runs the same real mailbox-level verification (syntax + mail-server + SMTP + catch-all) as Email Verification,
-        so the estimate reflects actual deliverability.
+        Upload any list (CSV or TXT) for a <strong>free</strong> bounce-rate analysis — no credits used.
+        Pick <strong>Fast</strong> for a near-instant estimate, or <strong>Accurate</strong> for a real mailbox-level SMTP check.
       </p>
 
-      <div className="card" style={{ padding: '1.75rem', maxWidth: 640 }}>
+      <div className="card ba-upload">
+        <div className="ba-mode">
+          <button
+            type="button"
+            className={`ba-mode-opt ${mode === 'fast' ? 'active' : ''}`}
+            onClick={() => setMode('fast')}
+          >
+            <Zap size={16} /> <span><strong>Fast estimate</strong><em>Syntax + mail-server + disposable · instant</em></span>
+          </button>
+          <button
+            type="button"
+            className={`ba-mode-opt ${mode === 'accurate' ? 'active' : ''}`}
+            onClick={() => setMode('accurate')}
+          >
+            <ShieldCheck size={16} /> <span><strong>Accurate</strong><em>Full SMTP mailbox check · slower</em></span>
+          </button>
+        </div>
+
         <div
           className="upload-area"
           onClick={() => fileInputRef.current.click()}
@@ -1690,22 +1717,37 @@ const BounceChecker = () => {
       )}
 
       {summary && (
-        <div className="card bounce-hero" style={{ marginTop: '1.5rem' }}>
-          <div className="bounce-main">
-            <div className="bounce-pct" style={{ color: bounceColor }}>{summary.bounceRate}%</div>
-            <div className="bounce-label">Estimated bounce rate<br /><span className="muted-inline">{summary.invalid.toLocaleString()} of {summary.total.toLocaleString()} will bounce</span></div>
+        <div className="card ba-result">
+          <div className="ba-result-head">Your Free Analysis Results <HelpCircle size={15} color="var(--text-secondary)" /></div>
+
+          <div className="ba-verdict">
+            <span className="ba-verdict-label">Estimated Bounce Rate:</span>
+            <span className="ba-verdict-value" style={{ color: bounceColor }}>{bounceLabel}</span>
           </div>
-          <div className="bounce-stats">
-            <div><span className="dot" style={{ background: '#059669' }} /> Deliverable (valid): <strong>{summary.deliverable}%</strong></div>
-            <div><span className="dot" style={{ background: '#d97706' }} /> Risky (catch-all/unknown): <strong>{summary.risky}%</strong></div>
-            <div><span className="dot" style={{ background: '#dc2626' }} /> Undeliverable (invalid): <strong>{summary.bounceRate}%</strong></div>
+          {verdict && <p className="ba-verdict-msg" style={{ color: verdict.color }}>{verdict.msg}</p>}
+
+          <div className="ba-bar" role="img" aria-label="Deliverability breakdown">
+            {summary.deliverable > 0 && <div style={{ width: `${summary.deliverable}%`, background: '#10b981' }} title={`Deliverable ${summary.deliverable}%`} />}
+            {summary.risky > 0 && <div style={{ width: `${summary.risky}%`, background: '#f59e0b' }} title={`Risky ${summary.risky}%`} />}
+            {summary.bounceRate > 0 && <div style={{ width: `${summary.bounceRate}%`, background: '#ef4444' }} title={`Undeliverable ${summary.bounceRate}%`} />}
           </div>
-          <div className="pill-row" style={{ marginTop: '1rem' }}>
-            <CountPill label="Valid" value={summary.valid} cls="valid" />
-            <CountPill label="Invalid" value={summary.invalid} cls="invalid" />
-            <CountPill label="Catch-all" value={summary.catchAll} cls="catch-all" />
-            <CountPill label="Unknown" value={summary.unknown} cls="unknown" />
-            <button className="btn-secondary" style={{ marginLeft: 'auto' }} onClick={() => downloadCSV(results, 'bounce_check.csv')}>
+          <div className="ba-legend">
+            <span><i style={{ background: '#10b981' }} /> Deliverable <strong>{summary.deliverable}%</strong></span>
+            <span><i style={{ background: '#f59e0b' }} /> Risky <strong>{summary.risky}%</strong></span>
+            <span><i style={{ background: '#ef4444' }} /> Undeliverable <strong>{summary.bounceRate}%</strong></span>
+          </div>
+
+          <div className="ba-tiles">
+            <div className="ba-tile"><div className="ba-tile-num" style={{ color: '#059669' }}>{summary.valid.toLocaleString()}</div><div className="ba-tile-lbl">Valid</div></div>
+            <div className="ba-tile"><div className="ba-tile-num" style={{ color: '#dc2626' }}>{summary.invalid.toLocaleString()}</div><div className="ba-tile-lbl">Invalid</div></div>
+            <div className="ba-tile"><div className="ba-tile-num" style={{ color: '#d97706' }}>{summary.catchAll.toLocaleString()}</div><div className="ba-tile-lbl">Catch-all</div></div>
+            <div className="ba-tile"><div className="ba-tile-num" style={{ color: '#64748b' }}>{summary.unknown.toLocaleString()}</div><div className="ba-tile-lbl">Unknown</div></div>
+            <div className="ba-tile"><div className="ba-tile-num">{summary.total.toLocaleString()}</div><div className="ba-tile-lbl">Total</div></div>
+          </div>
+
+          <div className="ba-result-actions">
+            <span className="muted-inline">{mode === 'accurate' ? 'Accurate mode · real SMTP mailbox check' : 'Fast mode · domain-level estimate'}</span>
+            <button className="btn-secondary" onClick={() => downloadCSV(results, 'bounce_check.csv')}>
               <Download size={15} /> Download full results
             </button>
           </div>

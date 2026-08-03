@@ -998,6 +998,47 @@
 .bounce-stats strong { color: var(--text-primary); }
 .bounce-stats .dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
 
+/* --- Bounce Rate analysis (redesigned) --- */
+.ba-upload { padding: 1.5rem; max-width: 660px; }
+.ba-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1.25rem; }
+.ba-mode-opt {
+  display: flex; align-items: center; gap: 0.6rem; text-align: left;
+  padding: 0.85rem 1rem; border-radius: 12px;
+  border: 1.5px solid var(--border-color); background: var(--bg-surface);
+  color: var(--text-secondary); transition: all 0.15s ease;
+}
+.ba-mode-opt span { display: flex; flex-direction: column; line-height: 1.25; }
+.ba-mode-opt strong { color: var(--text-primary); font-size: 0.95rem; }
+.ba-mode-opt em { font-style: normal; font-size: 0.76rem; color: var(--text-secondary); }
+.ba-mode-opt:hover { border-color: #c7d2fe; }
+.ba-mode-opt.active { border-color: var(--accent-color); background: #f5f3ff; box-shadow: 0 0 0 3px rgba(124,58,237,0.10); }
+.ba-mode-opt.active strong, .ba-mode-opt.active svg { color: var(--accent-color); }
+
+.ba-result { padding: 2rem 2rem 1.5rem; margin-top: 1.5rem; text-align: center; animation: fadeIn 0.4s ease forwards; }
+.ba-result-head { display: flex; align-items: center; justify-content: center; gap: 0.4rem; font-weight: 700; color: var(--text-primary); font-size: 1.05rem; }
+.ba-verdict { margin-top: 1.5rem; display: flex; align-items: baseline; justify-content: center; gap: 0.6rem; flex-wrap: wrap; }
+.ba-verdict-label { font-size: 1.35rem; font-weight: 700; color: var(--text-primary); }
+.ba-verdict-value { font-size: 1.75rem; font-weight: 800; }
+.ba-verdict-msg { margin: 0.6rem 0 0; font-weight: 600; }
+
+.ba-bar { display: flex; height: 14px; width: 100%; max-width: 520px; margin: 1.75rem auto 0.75rem; border-radius: 99px; overflow: hidden; background: var(--bg-surface-hover); }
+.ba-bar > div { height: 100%; transition: width 0.5s ease; }
+.ba-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 1.25rem; color: var(--text-secondary); font-size: 0.88rem; }
+.ba-legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+.ba-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.ba-legend strong { color: var(--text-primary); }
+
+.ba-tiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.75rem; margin: 1.75rem 0 0.5rem; }
+.ba-tile { padding: 1rem 0.5rem; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-surface); }
+.ba-tile-num { font-size: 1.5rem; font-weight: 800; color: var(--text-primary); }
+.ba-tile-lbl { font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.15rem; }
+
+.ba-result-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--border-color); flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .ba-mode { grid-template-columns: 1fr; }
+  .ba-tiles { grid-template-columns: repeat(3, 1fr); }
+}
+
 /* --- Profile: password fields with lock + eye --- */
 .pw-field { position: relative; display: flex; align-items: center; }
 .pw-field .input-field { padding-left: 2.3rem; padding-right: 2.5rem; width: 100%; }
