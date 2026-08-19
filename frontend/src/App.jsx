@@ -4,13 +4,13 @@ import { List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, Help
 import './App.css';
 import { googleSignIn } from './firebase';
 
-// API base URL. Leave VITE_API_URL empty for local dev — requests then go to
+// API base URL. Leave VITE_API_URL empty for local dev - requests then go to
 // the same origin and Vite's dev proxy (see vite.config.js) forwards them to
 // the backend, which avoids CORS and localhost/IPv6 issues. In production set
 // VITE_API_URL to your API origin (or '' if same-origin behind nginx).
 const API_URL = import.meta.env.VITE_API_URL || '';
 
-// Brand / legal placeholders — replace with your real company details before
+// Brand / legal placeholders - replace with your real company details before
 // going live. The legal pages below are professional templates and should be
 // reviewed by a qualified legal professional for your jurisdiction.
 const BRAND = {
@@ -91,7 +91,7 @@ const AuthProvider = ({ children }) => {
   };
 
   // Re-fetch the authoritative user (credits, profile) from the server so the
-  // UI — e.g. the sidebar Credits — always reflects the real value.
+  // UI - e.g. the sidebar Credits - always reflects the real value.
   const refreshUser = useCallback(async () => {
     try {
       const d = await apiFetch('/auth/me');
@@ -143,7 +143,7 @@ const JobProgress = ({ processed, total }) => {
         <strong>{pct}%</strong>
       </div>
       <div className="job-progress-track"><div className="job-progress-fill" style={{ width: `${pct}%` }} /></div>
-      <span className="job-progress-note">Large lists are processed in the background — every address is checked, nothing is skipped.</span>
+      <span className="job-progress-note">Large lists are processed in the background. Every address is checked, nothing is skipped.</span>
     </div>
   );
 };
@@ -238,7 +238,7 @@ const StatusIcon = ({ status }) => {
 };
 
 const ConfidenceBar = ({ value }) => {
-  if (typeof value !== 'number') return <span>—</span>;
+  if (typeof value !== 'number') return <span>-</span>;
   const color = value >= 70 ? '#059669' : value >= 40 ? '#d97706' : '#dc2626';
   return (
     <div style={{display:'flex', alignItems:'center', gap:'0.5rem'}}>
@@ -437,7 +437,7 @@ const HistoryPanel = ({ type, version }) => {
                     <td colSpan={6}>
                       {detail === null
                         ? <div className="history-empty"><Loader2 className="loader" size={16}/> Loading results…</div>
-                        : <ResultsTable results={detail} title={`${batchTitle(h)} — results`} />}
+                        : <ResultsTable results={detail} title={`${batchTitle(h)} results`} />}
                     </td>
                   </tr>
                 )}
@@ -519,7 +519,7 @@ const Counter = ({ value }) => {
   return <span ref={ref}>{match[1]}{shown}{match[3]}</span>;
 };
 
-// Smooth-scroll to a section id — works from any page (navigates home first if
+// Smooth-scroll to a section id - works from any page (navigates home first if
 // we're not on the landing page, so the nav links are usable everywhere).
 const useSectionNav = () => {
   const navigate = useNavigate();
@@ -595,28 +595,28 @@ const STEPS = [
 
 const TESTIMONIALS = [
   { quote: 'Our bounce rate dropped from 12% to under 1% after cleaning our list with BounceCure.', name: 'Sarah K.', role: 'Growth Lead', company: 'Northwind', rating: 5 },
-  { quote: 'The catch-all confidence score is a game changer — we finally trust our "risky" segment.', name: 'Daniel R.', role: 'Email Marketer', company: 'Loop Media', rating: 5 },
+  { quote: 'The catch-all confidence score is what won us over. We finally trust our "risky" segment.', name: 'Daniel R.', role: 'Email Marketer', company: 'Loop Media', rating: 5 },
   { quote: 'Bulk + CSV verification saved our sales team hours every week.', name: 'Aisha M.', role: 'Sales Ops', company: 'Brightlane', rating: 5 },
 ];
 
 const FAQS = [
-  { q: 'What does a verification actually check?', a: 'Every address goes through syntax validation, MX lookup, SMTP mailbox probing, disposable-domain detection and catch-all analysis — returning a precise status and a 0–100 confidence score.' },
-  { q: 'What do the statuses mean?', a: 'Safe = a real, deliverable mailbox (usually personal). Role = deliverable, but a group address like support@ or info@. Catch-all = the domain accepts every address, so we return a confidence score instead of a guarantee. Disposable = a temporary/throwaway provider. Invalid = it does not exist or the domain rejects mail. Inbox Full = the mailbox exists but is over quota. Disabled = the account existed but was disabled/suspended. Spamtrap = an address used to catch spammers — never send to it. Unknown = the server did not give a definitive answer (greylisting, timeouts).' },
-  { q: 'How accurate is BounceCure?', a: 'For domains that expose a mailbox, accuracy is typically 98–99%. Catch-all and unknown results reflect genuine limits of the SMTP protocol — no verifier can be 100% certain on those, which is exactly why we return a confidence score rather than a false “valid”.' },
-  { q: 'How do you handle catch-all domains?', a: 'We send multiple probes and compare the server responses, and for Microsoft 365 tenants we run a deep mailbox check — so even accept-all domains get a meaningful confidence score instead of a blind “valid”.' },
+  { q: 'What does a verification actually check?', a: 'Every address goes through syntax validation, MX lookup, SMTP mailbox probing, disposable-domain detection and catch-all analysis, and returns a precise status with a 0-100 confidence score.' },
+  { q: 'What do the statuses mean?', a: 'Safe = a real, deliverable mailbox (usually personal). Role = deliverable, but a group address like support@ or info@. Catch-all = the domain accepts every address, so we return a confidence score instead of a guarantee. Disposable = a temporary/throwaway provider. Invalid = it does not exist or the domain rejects mail. Inbox Full = the mailbox exists but is over quota. Disabled = the account existed but was disabled/suspended. Spamtrap = an address used to catch spammers. Never send to it. Unknown = the server did not give a definitive answer (greylisting, timeouts).' },
+  { q: 'How accurate is BounceCure?', a: 'For domains that expose a mailbox, accuracy is typically 98-99%. Catch-all and unknown results reflect genuine limits of the SMTP protocol; no verifier can be 100% certain on those, which is exactly why we return a confidence score rather than a false “valid”.' },
+  { q: 'How do you handle catch-all domains?', a: 'We send multiple probes and compare the server responses, and for Microsoft 365 tenants we run a deep mailbox check, so even accept-all domains get a meaningful confidence score instead of a blind “valid”.' },
   { q: 'Will verifying send an email to the address?', a: 'No. We talk to the mail server up to the point of checking the mailbox and then disconnect before any message is sent. Recipients never receive anything.' },
   { q: 'How fast is it and can I verify in bulk?', a: 'Single checks usually complete in under two seconds. You can paste a list or upload a CSV for bulk verification, and results stream back as each address is processed.' },
   { q: 'What file formats do you support for lists?', a: 'CSV files with one email per row (with or without a header). After processing you can export a clean CSV with the status, confidence and full details for every address.' },
-  { q: 'Does verifying improve my deliverability?', a: 'Yes. Removing invalid and risky addresses lowers your bounce rate, protects your sender reputation, and keeps you out of spam traps — which means more of your email reaches the inbox.' },
-  { q: 'How many free credits do I get?', a: 'Every new account starts with 100 free verification credits — no credit card required. One credit = one verified address.' },
+  { q: 'Does verifying improve my deliverability?', a: 'Yes. Removing invalid and risky addresses lowers your bounce rate, protects your sender reputation, and keeps you out of spam traps, which means more of your email reaches the inbox.' },
+  { q: 'How many free credits do I get?', a: 'Every new account starts with 100 free verification credits, with no credit card required. One credit = one verified address.' },
   { q: 'Do credits expire?', a: 'Free credits never expire. Paid plans renew monthly with a fresh allocation of credits.' },
-  { q: 'Can I sign in with Google?', a: 'Yes. You can create your account or log in with “Continue with Google”, or use a regular email and password — whichever you prefer.' },
-  { q: 'I forgot my password — what do I do?', a: 'On the login page click “Forgot password?”, enter your email, and we will send you a secure link to set a new password. If you signed up with Google, just use “Continue with Google” instead.' },
+  { q: 'Can I sign in with Google?', a: 'Yes. You can create your account or log in with “Continue with Google”, or use a regular email and password, whichever you prefer.' },
+  { q: 'I forgot my password. What do I do?', a: 'On the login page click “Forgot password?”, enter your email, and we will send you a secure link to set a new password. If you signed up with Google, just use “Continue with Google” instead.' },
   { q: 'Is there an API?', a: 'A REST API is on the roadmap for the Pro plan so you can verify addresses directly from your app or signup form in real time. Contact us if you would like early access.' },
   { q: 'Is my data safe and private?', a: 'Passwords are hashed with bcrypt, all traffic is encrypted over TLS, we never sell your data, and verification history is automatically deleted after 30 days. See our Privacy Policy and GDPR page for details.' },
-  { q: 'Do you store the lists I upload?', a: 'Only your results are kept, and only for 30 days so you can re-export them — after that they are deleted automatically. You can also request deletion at any time.' },
+  { q: 'Do you store the lists I upload?', a: 'Only your results are kept, and only for 30 days so you can re-export them; after that they are deleted automatically. You can also request deletion at any time.' },
   { q: 'Can I cancel or get a refund?', a: 'You can cancel anytime and keep access until the end of your billing period. Unused credits are non-refundable, but there is no long-term contract.' },
-  { q: 'Still have questions?', a: 'Book a quick call with us or email support — we are happy to walk you through how BounceCure fits your workflow.' },
+  { q: 'Still have questions?', a: 'Book a quick call with us or email support. We are happy to walk you through how BounceCure fits your workflow.' },
 ];
 
 const PricingCards = () => (
@@ -651,14 +651,14 @@ const FaqItem = ({ q, a }) => {
 };
 
 // Display name for the profile trigger: the user's name, or the email's local
-// part (before @) as a name-like fallback — never the full email.
+// part (before @) as a name-like fallback - never the full email.
 const displayName = (u) => {
   const n = `${u?.firstName || ''} ${u?.lastName || ''}`.trim();
   if (n) return n;
   return u?.email ? u.email.split('@')[0] : 'Account';
 };
 
-// Reusable account dropdown (top-right corner). Shown when signed in — in the
+// Reusable account dropdown (top-right corner). Shown when signed in - in the
 // public nav and in the dashboard header.
 const ProfileMenu = () => {
   const { user, logout } = useAuth();
@@ -803,7 +803,7 @@ const PublicFooter = () => {
 
         <div className="footer-cta">
           <h4>Start in seconds</h4>
-          <p>Create a free account and get 100 verifications — no card required.</p>
+          <p>Create a free account and get 100 verifications. No card required.</p>
           <Link to="/register" className="footer-cta-btn">Create free account <ArrowRight size={16} /></Link>
         </div>
       </div>
@@ -824,9 +824,9 @@ const Landing = () => (
       <div className="hero-glow" />
       <div className="hero-badge"><Zap size={14}/> Trusted email verification for teams</div>
       <h1>Stop the bounce.<br/>Verify <span className="grad-text">every email.</span></h1>
-      <p>{BRAND.name} checks syntax, MX, SMTP mailbox, disposable and catch-all — with a confidence score for every address — so your emails reach real inboxes.</p>
+      <p>{BRAND.name} checks syntax, MX, SMTP mailbox, disposable and catch-all, with a confidence score for every address, so your emails reach real inboxes.</p>
       <div className="hero-cta">
-        <Link to="/register" className="btn-primary" style={{width:'auto', padding:'0.9rem 1.7rem'}}>Start free — 100 credits <ArrowRight size={18}/></Link>
+        <Link to="/register" className="btn-primary" style={{width:'auto', padding:'0.9rem 1.7rem'}}>Start free with 100 credits <ArrowRight size={18}/></Link>
         <a href="#pricing" className="btn-secondary" style={{padding:'0.9rem 1.7rem', textDecoration:'none'}}>View pricing</a>
       </div>
       <div className="hero-trust"><CheckCircle2 size={15} color="#059669"/> No credit card required · 100 free verifications</div>
@@ -907,7 +907,7 @@ const Landing = () => (
       <Reveal className="faq-call" variant="up">
         <div className="faq-call-text">
           <strong>Still have questions?</strong>
-          <span>Talk to a human — grab a free 15-minute call and we’ll help you get set up.</span>
+          <span>Talk to a human. Grab a free 15-minute call and we’ll help you get set up.</span>
         </div>
         <a href={BRAND.callUrl} target="_blank" rel="noopener noreferrer" className="btn-primary faq-call-btn">
           <Phone size={17} /> Book a quick call
@@ -918,7 +918,7 @@ const Landing = () => (
     <section className="cta-section">
       <Reveal className="cta-inner" variant="up">
         <h2>Ready to clean your list?</h2>
-        <p>Get 100 free verifications — no credit card required.</p>
+        <p>Get 100 free verifications. No credit card required.</p>
         <Link to="/register" className="btn-primary" style={{width:'auto', padding:'0.9rem 2rem', background:'#fff', color:'var(--accent-color)'}}>Get started free <ArrowRight size={18}/></Link>
       </Reveal>
     </section>
@@ -940,7 +940,7 @@ const GoogleIcon = (props) => (
   </svg>
 );
 
-// Two-part auth layout — both halves share the same light tone. One side is the
+// Two-part auth layout - both halves share the same light tone. One side is the
 // form, the other is brand copy; `reverse` mirrors them (form left / brand right).
 const AuthShell = ({ title, subtitle, error, children, alt, reverse, brandTitle, brandText }) => {
   const { login } = useAuth();
@@ -1028,7 +1028,7 @@ const Login = () => {
         body: JSON.stringify({ email, password })
       });
       if (data.error) throw new Error(data.error);
-      // Account has 2FA — show the code prompt instead of logging in.
+      // Account has 2FA - show the code prompt instead of logging in.
       if (data.twoFactorRequired) { setTempToken(data.tempToken); setLoading(false); return; }
       login(data.token, data.user);
       navigate('/dashboard');
@@ -1225,7 +1225,7 @@ const Register = () => {
       error={error}
       reverse
       brandTitle="Stop the bounce. Verify every email."
-      brandText="Create a free account and get 100 verifications — no credit card required."
+      brandText="Create a free account and get 100 verifications. No credit card required."
       alt={<>Already have an account? <Link to="/login">Login</Link></>}
     >
       <form onSubmit={handleSubmit} className="form-group">
@@ -1293,9 +1293,9 @@ const DashboardLayout = ({ children }) => {
 };
 
 // One unified verification page (Reoon-style): single email, paste-a-list, and
-// CSV/TXT upload — all in one place.
+// CSV/TXT upload - all in one place.
 // ---------------------------------------------------------------------------
-// Column-mapping modal — shown after a file is picked, so the user can confirm
+// Column-mapping modal - shown after a file is picked, so the user can confirm
 // which column holds the email, whether the first row is a header, and whether
 // duplicates should be removed, before verification starts. Idea inspired by
 // list-upload mappers (Reoon etc.), built for this app's own flow.
@@ -1453,7 +1453,7 @@ const ColumnMapModal = ({ file, ctaLabel = 'Start Verification', onCancel, onSta
 };
 
 // Educational "learn" section shown at the bottom of the Email Verification
-// page — explains what verification is, how to read a result, and why it matters.
+// page - explains what verification is, how to read a result, and why it matters.
 const VERIFY_SIGNALS = [
   { icon: CheckCircle2, name: 'Syntax', desc: 'Confirms the address is formatted correctly before anything else.' },
   { icon: MailCheck, name: 'Deliverability', desc: 'Checks the address can actually receive mail.' },
@@ -1466,7 +1466,7 @@ const VERIFY_SIGNALS = [
 ];
 const VERIFY_WHY = [
   { icon: Star, title: 'Improve sender reputation', desc: 'Sending to invalid or inactive addresses pushes your bounce rate up, and mailbox providers notice. Verifying each address keeps bounces low and your reputation intact, so future emails keep landing in the inbox.' },
-  { icon: Zap, title: 'Increase deliverability', desc: 'Risky addresses, full inboxes and dead domains all drag deliverability down. The verifier flags these before they cost you, so you only send to addresses worth sending to — lifting open and reply rates over time.' },
+  { icon: Zap, title: 'Increase deliverability', desc: 'Risky addresses, full inboxes and dead domains all drag deliverability down. The verifier flags these before they cost you, so you only send to addresses worth sending to, lifting open and reply rates over time.' },
   { icon: ShieldCheck, title: 'Avoid spam folders', desc: 'Poor list quality, fake addresses and spam traps push messages into spam and trigger filters. Send to a clean, verified list and far more of your outreach lands where people actually read it.' },
 ];
 
@@ -1476,13 +1476,13 @@ const VerificationGuide = () => (
       <div className="vguide-hero-icon"><MailCheck size={26} /></div>
       <div>
         <h3>What is email verification?</h3>
-        <p>Email verification checks whether an address exists, is active and is safe to send to — looking at its syntax, domain, mail server and the risk signals tied to it. The goal is simple: confirm a real person sits behind the inbox before you hit send. Sending to bad addresses drives up bounces and quietly damages your sender reputation, so verifying first keeps your list clean and your emails landing where they should.</p>
+        <p>Email verification checks whether an address exists, is active and is safe to send to, by looking at its syntax, domain, mail server and the risk signals tied to it. The goal is simple: confirm a real person sits behind the inbox before you hit send. Sending to bad addresses drives up bounces and quietly damages your sender reputation, so verifying first keeps your list clean and your emails landing where they should.</p>
       </div>
     </div>
 
     <div className="vguide-section">
       <h3>How to read your result</h3>
-      <p className="muted">Every check returns a clear verdict and a confidence score from 0–100. A score in the 90s means the address is safe to send to. Below that, each signal is broken down so you see exactly <em>why</em> an address is safe or risky — not just a pass or fail.</p>
+      <p className="muted">Every check returns a clear verdict and a confidence score from 0 to 100. A score in the 90s means the address is safe to send to. Below that, each signal is broken down so you see exactly <em>why</em> an address is safe or risky, not just a pass or fail.</p>
       <div className="vguide-signals">
         {VERIFY_SIGNALS.map((s) => (
           <div className="vguide-signal" key={s.name}>
@@ -1589,7 +1589,7 @@ const EmailVerification = () => {
   return (
     <div>
       <p className="muted" style={{ marginTop: '0', marginBottom: '1.5rem' }}>
-        Verify a single address, paste a list, or upload a file — all in one place.
+        Verify a single address, paste a list, or upload a file, all in one place.
       </p>
 
       {/* Single email */}
@@ -1611,7 +1611,7 @@ const EmailVerification = () => {
           <div className="verify-opt-title"><List size={17} /> Paste a list</div>
           <form onSubmit={verifyBulk} className="form-group">
             <label>Task Name <span className="muted-inline">(optional)</span></label>
-            <input type="text" className="input-field" value={bulkName} onChange={e => setBulkName(e.target.value)} placeholder="e.g. Newsletter — July" maxLength={120} />
+            <input type="text" className="input-field" value={bulkName} onChange={e => setBulkName(e.target.value)} placeholder="e.g. July Newsletter" maxLength={120} />
             <label style={{ marginTop: '0.9rem' }}>Email addresses (one per line)</label>
             <textarea className="input-field" style={{ minHeight: '170px' }} value={bulkText} onChange={e => setBulkText(e.target.value)} placeholder={"one@example.com\ntwo@example.com"} />
             <button type="submit" className="btn-primary" disabled={bulkLoading} style={{ marginTop: '1rem' }}>
@@ -1624,7 +1624,7 @@ const EmailVerification = () => {
           <div className="verify-opt-title"><Upload size={17} /> Upload a file</div>
           <div className="form-group">
             <label>Task Name <span className="muted-inline">(optional)</span></label>
-            <input type="text" className="input-field" value={csvName} onChange={e => setCsvName(e.target.value)} placeholder="e.g. CRM export — Q3" maxLength={120} />
+            <input type="text" className="input-field" value={csvName} onChange={e => setCsvName(e.target.value)} placeholder="e.g. CRM export Q3" maxLength={120} />
           </div>
           <div
             className="upload-area"
@@ -1726,14 +1726,14 @@ const BounceChecker = () => {
   const bounceLabel = !summary ? '' : summary.invalid === 0 ? '0%' : summary.rawBounce < 1 ? 'Less than 1%' : `${Math.round(summary.rawBounce)}%`;
   const verdict = !summary ? null
     : summary.rawBounce < 3 ? { msg: 'Congrats! This list may not require cleaning.', color: '#059669' }
-    : summary.rawBounce <= 8 ? { msg: 'Looks decent — a light clean-up could lower your bounce rate.', color: '#d97706' }
+    : summary.rawBounce <= 8 ? { msg: 'Looks decent. A light clean-up could lower your bounce rate.', color: '#d97706' }
     : summary.rawBounce <= 20 ? { msg: 'Consider cleaning this list before your next send.', color: '#d97706' }
     : { msg: 'This list needs cleaning to protect your sender reputation.', color: '#dc2626' };
 
   return (
     <div>
       <p className="muted" style={{ marginTop: '0', marginBottom: '1.5rem' }}>
-        Upload any list (CSV or TXT) for a <strong>free</strong> bounce-rate analysis — no credits used.
+        Upload any list (CSV or TXT) for a <strong>free</strong> bounce-rate analysis. No credits used.
         Pick <strong>Fast</strong> for a near-instant estimate, or <strong>Accurate</strong> for a real mailbox-level SMTP check.
       </p>
 
@@ -1912,7 +1912,7 @@ const CatchAllVerifier = () => {
     <div>
       <p className="muted" style={{ marginTop: 0, marginBottom: '1.5rem' }}>
         Catch-all domains accept every address, so standard SMTP can't tell a real mailbox from a fake one.
-        This tool deep-resolves them — using Microsoft&nbsp;365 signals and SMTP reply-differencing — so a catch-all can come back
+        This tool deep-resolves them using Microsoft&nbsp;365 signals and SMTP reply-differencing, so a catch-all can come back
         <strong> deliverable</strong> instead of just “risky”. Addresses that aren't catch-all are flagged so you verify them normally.
       </p>
 
@@ -1987,7 +1987,7 @@ const BillingPage = () => {
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState(() => {
     const p = new URLSearchParams(window.location.search);
-    if (p.get('paid')) return { ok: true, text: 'Payment received — your credits will appear shortly.' };
+    if (p.get('paid')) return { ok: true, text: 'Payment received. Your credits will appear shortly.' };
     if (p.get('canceled')) return { ok: false, text: 'Checkout was canceled.' };
     return null;
   });
@@ -2019,7 +2019,7 @@ const BillingPage = () => {
   };
 
   const METHODS = [
-    { id: 'stripe', label: 'Card (Stripe)', icon: Zap, hint: 'Instant — Visa, Mastercard, Amex' },
+    { id: 'stripe', label: 'Card (Stripe)', icon: Zap, hint: 'Instant: Visa, Mastercard, Amex' },
     { id: 'wise', label: 'Wise', icon: RefreshCw, hint: 'Low-fee international transfer' },
     { id: 'bank', label: 'Bank transfer', icon: Scale, hint: 'International / SWIFT' },
   ];
@@ -2092,7 +2092,7 @@ const BillingPage = () => {
 
       <div className="bill-cta">
         <div>
-          <div className="bill-cta-sum">{pack ? `${pack.credits.toLocaleString()} credits` : '—'}</div>
+          <div className="bill-cta-sum">{pack ? `${pack.credits.toLocaleString()} credits` : '-'}</div>
           <div className="muted-inline">{pack ? `${pack.name} pack` : ''}</div>
         </div>
         <button className="btn-primary" onClick={pay} disabled={loading || !pack}>
@@ -2259,7 +2259,7 @@ const MyAccount = () => {
   // Reflect the account's 2FA status whenever the user loads/refreshes.
   useEffect(() => { setTfEnabled(!!user?.totpEnabled); }, [user?.totpEnabled]);
 
-  // 2FA: start enrolment — fetch a secret + QR to display.
+  // 2FA: start enrolment - fetch a secret + QR to display.
   const startTwoFactor = async () => {
     setTfErr(''); setTfBusy(true);
     try {
@@ -2284,7 +2284,7 @@ const MyAccount = () => {
     setTfBusy(false);
   };
 
-  // 2FA: turn it off — requires a current code.
+  // 2FA: turn it off - requires a current code.
   const disableTwoFactor = async (e) => {
     e.preventDefault();
     setTfErr(''); setTfBusy(true);
@@ -2616,13 +2616,13 @@ const GDPR = () => (
 
     <h2>3. Your Rights</h2>
     <ul>
-      <li><strong>Access</strong> — obtain a copy of the personal data we hold about you.</li>
-      <li><strong>Rectification</strong> — correct inaccurate or incomplete data.</li>
-      <li><strong>Erasure</strong> — request deletion of your data ("right to be forgotten").</li>
-      <li><strong>Restriction</strong> — limit how we process your data.</li>
-      <li><strong>Portability</strong> — receive your data in a structured, machine-readable format.</li>
-      <li><strong>Objection</strong> — object to processing based on legitimate interests.</li>
-      <li><strong>Withdraw consent</strong> — where processing is based on consent.</li>
+      <li><strong>Access</strong>: obtain a copy of the personal data we hold about you.</li>
+      <li><strong>Rectification</strong>: correct inaccurate or incomplete data.</li>
+      <li><strong>Erasure</strong>: request deletion of your data ("right to be forgotten").</li>
+      <li><strong>Restriction</strong>: limit how we process your data.</li>
+      <li><strong>Portability</strong>: receive your data in a structured, machine-readable format.</li>
+      <li><strong>Objection</strong>: object to processing based on legitimate interests.</li>
+      <li><strong>Withdraw consent</strong>: where processing is based on consent.</li>
     </ul>
 
     <h2>4. Exercising Your Rights</h2>
@@ -2786,7 +2786,7 @@ const TasksResults = () => {
                         <td colSpan={9}>
                           {detail === null
                             ? <div className="history-empty"><Loader2 className="loader" size={16}/> Loading results…</div>
-                            : <ResultsTable results={detail} title={`${batchTitle(b)} — results`} />}
+                            : <ResultsTable results={detail} title={`${batchTitle(b)} results`} />}
                         </td>
                       </tr>
                     )}
@@ -2799,7 +2799,7 @@ const TasksResults = () => {
 
         {filtered.length > PAGE_SIZE && (
           <div className="tasks-pager">
-            <span>Showing {(current - 1) * PAGE_SIZE + 1}–{Math.min(current * PAGE_SIZE, filtered.length)} of {filtered.length}</span>
+            <span>Showing {(current - 1) * PAGE_SIZE + 1}-{Math.min(current * PAGE_SIZE, filtered.length)} of {filtered.length}</span>
             <div className="pager-btns">
               <button className="btn-secondary" disabled={current <= 1} onClick={() => setPage(current - 1)}>←</button>
               <span className="pager-current">{current} / {pages}</span>
@@ -2824,7 +2824,7 @@ const AdminPanel = () => {
   const [loading, setLoading] = useState(true);
   const [viewerRole, setViewerRole] = useState(user.role);
   // Per-row "amount to add" (a delta), keyed by user id. The Credits column is
-  // an add-box — it never shows the existing balance; whatever you type/step
+  // an add-box - it never shows the existing balance; whatever you type/step
   // here is ADDED to the user's current credits when you press Enter / ✓.
   const [credAdd, setCredAdd] = useState({});
   const [credFlash, setCredFlash] = useState({}); // transient "+N added" per row
@@ -2885,11 +2885,11 @@ const AdminPanel = () => {
     <div>
 
       <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:'1.25rem', marginBottom:'1.5rem'}}>
-        <StatCard label="Total Users" value={stats?.total_users ?? '—'} accent="var(--accent-color)" />
-        <StatCard label="Admins" value={stats?.admins ?? '—'} />
-        {viewerRole === 'superadmin' && <StatCard label="Super Admins" value={stats?.superadmins ?? '—'} accent="#7c3aed" />}
-        <StatCard label="Total Verifications" value={stats?.total_emails ?? '—'} />
-        <StatCard label="Credits in System" value={stats?.total_credits ?? '—'} accent="#059669" />
+        <StatCard label="Total Users" value={stats?.total_users ?? '-'} accent="var(--accent-color)" />
+        <StatCard label="Admins" value={stats?.admins ?? '-'} />
+        {viewerRole === 'superadmin' && <StatCard label="Super Admins" value={stats?.superadmins ?? '-'} accent="#7c3aed" />}
+        <StatCard label="Total Verifications" value={stats?.total_emails ?? '-'} />
+        <StatCard label="Credits in System" value={stats?.total_credits ?? '-'} accent="#059669" />
       </div>
 
       <div className="card" style={{padding:0, overflow:'hidden'}}>
@@ -2907,10 +2907,10 @@ const AdminPanel = () => {
                   <tr key={u.id} className="admin-user-row" title="Open this user's lifetime history"
                       onClick={() => navigate(`/admin/user/${encodeURIComponent(u.id)}`)}>
                     <td><span className="admin-uid">{u.displayId || u.id}</span></td>
-                    <td style={{color:'var(--text-secondary)', fontSize:'0.85rem'}}>{u.created_at ? formatDate(u.created_at) : '—'}</td>
+                    <td style={{color:'var(--text-secondary)', fontSize:'0.85rem'}}>{u.created_at ? formatDate(u.created_at) : '-'}</td>
                     <td><strong>{u.email}</strong>{u.id === user.id && <span style={{color:'var(--text-secondary)', fontWeight:400}}> (you)</span>}</td>
                     <td><span className={`badge role-${u.role || 'user'}`}>{ROLE_LABELS[u.role] || 'User'}</span></td>
-                    {/* The Add Credits cell is a control — clicking it must NOT open the history page. */}
+                    {/* The Add Credits cell is a control - clicking it must NOT open the history page. */}
                     <td onClick={(e) => e.stopPropagation()} style={{cursor:'default'}}>
                       <div style={{display:'flex', alignItems:'center', gap:'0.35rem'}}>
                         <button className="icon-btn" title="Decrease amount by 100" onClick={() => stepAdd(u.id, -100)}><Minus size={14}/></button>
@@ -2960,7 +2960,7 @@ const AdminPanel = () => {
   );
 };
 
-// Per-user lifetime history — opened by clicking a row in the Admin Panel.
+// Per-user lifetime history - opened by clicking a row in the Admin Panel.
 const AdminUserHistory = () => {
   const { uid } = useParams();
   const navigate = useNavigate();
@@ -2994,7 +2994,7 @@ const AdminUserHistory = () => {
               <span className="admin-uid">{u.displayId || u.id}</span>
             </div>
             <div className="muted-inline" style={{ marginTop: '0.35rem', display: 'block' }}>
-              Joined {u.created_at ? formatDate(u.created_at) : '—'}
+              Joined {u.created_at ? formatDate(u.created_at) : '-'}
             </div>
           </div>
 

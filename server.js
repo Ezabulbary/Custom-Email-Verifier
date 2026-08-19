@@ -8,7 +8,7 @@ try {
         process.loadEnvFile(_envPath);
         console.log('[Env] Loaded .env');
     }
-} catch (e) { /* older Node or no .env — fall back to real environment vars */ }
+} catch (e) { /* older Node or no .env - fall back to real environment vars */ }
 
 const express = require('express');
 const cors = require('cors');
@@ -71,7 +71,7 @@ const packById = (id) => CREDIT_PACKS.find(p => p.id === id) || null;
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 
-// Stripe webhook — MUST read the RAW body to verify the signature, so it is
+// Stripe webhook - MUST read the RAW body to verify the signature, so it is
 // mounted with express.raw BEFORE the global express.json() below. On a
 // completed checkout it credits the buyer's account by the pack's credits.
 app.post('/billing/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
@@ -79,7 +79,7 @@ app.post('/billing/stripe/webhook', express.raw({ type: 'application/json' }), a
     const sig = String(req.headers['stripe-signature'] || '');
     const payload = req.body; // Buffer (raw)
 
-    // Header format: t=timestamp,v1=hexmac[,v1=hexmac...] — during a secret roll
+    // Header format: t=timestamp,v1=hexmac[,v1=hexmac...] - during a secret roll
     // Stripe sends MULTIPLE v1 signatures, so collect them all and accept if any
     // matches (each compared in constant time).
     let ts = null; const sigs = [];
@@ -111,12 +111,12 @@ app.post('/billing/stripe/webhook', express.raw({ type: 'application/json' }), a
         const s = event.data.object || {};
         const userId = (s.metadata && s.metadata.userId) || s.client_reference_id;
         const credits = parseInt(s.metadata && s.metadata.credits, 10);
-        // TEST-MODE events never grant credits — only a REAL (live-mode) payment
+        // TEST-MODE events never grant credits - only a REAL (live-mode) payment
         // whose session actually completed as paid adds credits to the account.
         if (event.livemode !== true) {
-            console.log(`[Billing] Ignored TEST-mode Stripe event ${event.id || ''} — no credits granted.`);
+            console.log(`[Billing] Ignored TEST-mode Stripe event ${event.id || ''} - no credits granted.`);
         } else if (s.payment_status && s.payment_status !== 'paid') {
-            console.log(`[Billing] Session ${s.id} completed but payment_status=${s.payment_status} — no credits granted.`);
+            console.log(`[Billing] Session ${s.id} completed but payment_status=${s.payment_status} - no credits granted.`);
         } else if (userId && credits > 0) {
             // Idempotency: Stripe retries deliveries, and a duplicate must never
             // grant credits twice. claimBillingEvent() succeeds only the FIRST
@@ -141,7 +141,7 @@ app.use(express.json({ limit: '15mb' }));
 // Never ship a hardcoded secret: require JWT_SECRET in production. In
 // development, if none is set, persist a generated secret to a local file so
 // sessions survive server restarts (otherwise a random per-process secret would
-// invalidate every token on restart — which shows up as "refresh logs me out").
+// invalidate every token on restart - which shows up as "refresh logs me out").
 const JWT_SECRET = process.env.JWT_SECRET || (() => {
     if (process.env.NODE_ENV === 'production') {
         console.error('FATAL: JWT_SECRET must be set in production.');
@@ -151,14 +151,14 @@ const JWT_SECRET = process.env.JWT_SECRET || (() => {
     try {
         if (fs.existsSync(secretPath)) {
             const s = fs.readFileSync(secretPath, 'utf8').trim();
-            if (s) { console.warn('[Security] JWT_SECRET not set — using the persisted dev secret (.jwt_secret). Set JWT_SECRET in .env for production.'); return s; }
+            if (s) { console.warn('[Security] JWT_SECRET not set - using the persisted dev secret (.jwt_secret). Set JWT_SECRET in .env for production.'); return s; }
         }
         const s = crypto.randomBytes(48).toString('hex');
         fs.writeFileSync(secretPath, s, { mode: 0o600 });
-        console.warn('[Security] JWT_SECRET not set — generated a persistent dev secret (.jwt_secret) so sessions survive restarts. Set JWT_SECRET in .env for production.');
+        console.warn('[Security] JWT_SECRET not set - generated a persistent dev secret (.jwt_secret) so sessions survive restarts. Set JWT_SECRET in .env for production.');
         return s;
     } catch (e) {
-        console.warn('[Security] JWT_SECRET not set and .jwt_secret unavailable — using an ephemeral secret (sessions reset on restart).');
+        console.warn('[Security] JWT_SECRET not set and .jwt_secret unavailable - using an ephemeral secret (sessions reset on restart).');
         return crypto.randomBytes(48).toString('hex');
     }
 })();
@@ -181,7 +181,7 @@ let port25Open = null; // null = unknown/checking, true/false once probed
         if (done) return; done = true; s.destroy();
         port25Open = open;
         if (open) {
-            console.log('[Diag] Outbound port 25 is OPEN — SMTP mailbox verification is available.');
+            console.log('[Diag] Outbound port 25 is OPEN - SMTP mailbox verification is available.');
         } else {
             console.warn('==================================================================');
             console.warn(`[Diag] Outbound port 25 appears BLOCKED (${why}).`);
@@ -215,7 +215,7 @@ const EMAIL_RE = /^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/;
 const ROLES = ['user', 'admin', 'superadmin'];
 
 // Configured privileged emails. SUPERADMIN_EMAIL becomes superadmin, ADMIN_EMAIL
-// becomes admin — on startup (even for already-registered accounts) and at signup.
+// becomes admin - on startup (even for already-registered accounts) and at signup.
 const SUPERADMIN_EMAIL = (process.env.SUPERADMIN_EMAIL || '').trim().toLowerCase();
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 
@@ -287,7 +287,7 @@ app.post('/auth/login', loginLimiter, async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ error: 'Invalid email or password' });
 
-        // If 2FA (authenticator app) is enabled, don't issue the real token yet —
+        // If 2FA (authenticator app) is enabled, don't issue the real token yet -
         // return a short-lived tempToken and require a code via /auth/2fa/verify.
         const twoFA = await store.getTwoFactor(user.id);
         if (twoFA && twoFA.totpEnabled) {
@@ -391,16 +391,16 @@ async function deliverResetEmail(email, link) {
             console.log(`[Reset] Reset email sent to ${email}.`);
             return;
         } catch (e) {
-            // Loud, actionable — if reset emails aren't arriving, the SMTP error
+            // Loud, actionable - if reset emails aren't arriving, the SMTP error
             // (bad credentials, wrong host/port, blocked outbound 587/465) is here.
             console.error(`[Reset] FAILED to send reset email to ${email}:`, (e && e.stack) || e);
             console.error('[Reset] Check SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / SMTP_FROM in your .env.');
             // fall through to logging so a mail outage doesn't fully break resets
         }
     } else {
-        // SMTP isn't configured at all — this is the #1 reason "forgot password"
+        // SMTP isn't configured at all - this is the #1 reason "forgot password"
         // seems to do nothing. Say so loudly instead of silently swallowing it.
-        console.warn('[Reset] SMTP is NOT configured — no email can be sent. '
+        console.warn('[Reset] SMTP is NOT configured - no email can be sent. '
             + 'Set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM in .env to enable password-reset emails.');
     }
     // Always surface the link in the server log so the flow is usable even
@@ -466,7 +466,7 @@ function authenticateToken(req, res, next) {
     jwt.verify(token, JWT_SECRET, (err, user) => {
         if (err) return res.status(403).json({ error: 'Forbidden' });
         // A pre-2FA token (issued by /auth/login when 2FA is on) is NOT a session
-        // token — it only authorises /auth/2fa/verify. Reject it everywhere else,
+        // token - it only authorises /auth/2fa/verify. Reject it everywhere else,
         // otherwise anyone with just the password could skip the second factor.
         if (user && user.twofa) return res.status(403).json({ error: 'Two-factor verification required' });
         req.user = user;
@@ -506,7 +506,7 @@ app.patch('/auth/profile', authenticateToken, async (req, res) => {
     }
 });
 
-// Change the signed-in user's own password. Requires the current password —
+// Change the signed-in user's own password. Requires the current password -
 // except for Google-only accounts (no password yet), which can set one.
 app.post('/auth/change-password', authenticateToken, async (req, res) => {
     const { currentPassword, newPassword } = req.body || {};
@@ -541,7 +541,7 @@ app.post('/auth/2fa/totp/setup', authenticateToken, async (req, res) => {
         const user = await store.getUserById(req.user.id);
         if (!user) return res.status(404).json({ error: 'User not found' });
         const secret = totp.generateSecret();
-        // Store as pending — totpEnabled stays false until /enable succeeds.
+        // Store as pending - totpEnabled stays false until /enable succeeds.
         await store.setTwoFactor(req.user.id, { totpSecret: secret, totpEnabled: false });
         const url = totp.otpauthURL(secret, user.email);
         let qrDataUrl = null;
@@ -574,7 +574,7 @@ app.post('/auth/2fa/totp/enable', authenticateToken, async (req, res) => {
     }
 });
 
-// Turn 2FA off — requires a valid code (or the current password would also be
+// Turn 2FA off - requires a valid code (or the current password would also be
 // acceptable; we keep it to a code for simplicity).
 app.post('/auth/2fa/totp/disable', authenticateToken, async (req, res) => {
     const { code } = req.body || {};
@@ -594,7 +594,7 @@ app.post('/auth/2fa/totp/disable', authenticateToken, async (req, res) => {
     }
 });
 
-// Admin guard — allows admin AND superadmin. Exposes the live role on req so
+// Admin guard - allows admin AND superadmin. Exposes the live role on req so
 // handlers can apply superadmin-only rules.
 async function requireAdmin(req, res, next) {
     try {
@@ -613,13 +613,13 @@ async function requireAdmin(req, res, next) {
 
 const HISTORY_RETENTION_DAYS = store.HISTORY_RETENTION_DAYS;
 
-// Save an execution as a numbered batch. History is best-effort — a failure
+// Save an execution as a numbered batch. History is best-effort - a failure
 // here never fails the verification request itself.
 async function saveBatch(userId, type, results, name) {
     try {
         return await store.createBatch(userId, { type, name, results });
     } catch (err) {
-        // Loud, actionable log — if batches aren't showing in Tasks & Results,
+        // Loud, actionable log - if batches aren't showing in Tasks & Results,
         // the reason (e.g. a Firestore permission/quota error) shows up here.
         console.error(`[History] FAILED to save ${type} batch for user ${userId}:`, (err && err.stack) || err);
         return null;
@@ -637,7 +637,7 @@ setInterval(cleanupHistory, 6 * 60 * 60 * 1000);
 // --- Verification Endpoints (Protected) ---
 
 // A credit is charged ONLY for emails we could conclusively check. A 'unknown'
-// result means verification failed (SMTP unreachable, timeout, greylisting) —
+// result means verification failed (SMTP unreachable, timeout, greylisting) -
 // those are never charged. Every other fine-grained status (safe, role,
 // catch-all, disposable, invalid, inbox_full, disabled, spamtrap) is a
 // definitive answer and is chargeable.
@@ -744,7 +744,7 @@ async function runJob(job) {
         console.error('Job error:', err.message);
         job.status = 'error';
         job.error = 'Verification failed';
-        // The job failed before billing — refund everything we reserved so a
+        // The job failed before billing - refund everything we reserved so a
         // crash never silently eats the user's credits.
         if (job.charge && job.reserved > 0) {
             try { await store.adjustCredits(job.userId, job.reserved); } catch {}
@@ -770,7 +770,7 @@ async function startVerificationJob(req, res, opts) {
 
     // Billing jobs: ATOMICALLY reserve one credit per address up front, so
     // concurrent jobs can't each pass a stale balance check and overspend. Only
-    // successful checks are actually billed — unused credits are refunded when
+    // successful checks are actually billed - unused credits are refunded when
     // the job finishes. Free jobs (bounce) skip this entirely.
     let reserved = 0;
     if (charge) {
@@ -806,7 +806,7 @@ app.post('/verify/bulk', authenticateToken, async (req, res) => {
     }
 });
 
-// Parse an uploaded CSV/TXT into { emails, sources } — KEEPING every original
+// Parse an uploaded CSV/TXT into { emails, sources } - KEEPING every original
 // column. Robust to header name, column position, delimiter, BOM, quoting, and
 // whether there's a header row at all: the email is found by VALUE. `sources[i]`
 // is the full original row (as an object keyed by header) for emails[i], so the
@@ -939,10 +939,10 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), async (req, re
 
 // --- Bounce Rate check (FREE) ---
 // Two modes, both free (charge:false):
-//   • 'fast'     (default) — quickVerify: syntax + disposable + MX only, no SMTP.
+//   • 'fast'     (default) - quickVerify: syntax + disposable + MX only, no SMTP.
 //                 Near-instant, like NeverBounce's free list analysis. Good for a
 //                 quick, domain-level bounce ESTIMATE.
-//   • 'accurate' — verifyEmail: full syntax + disposable + MX + SMTP + catch-all,
+//   • 'accurate' - verifyEmail: full syntax + disposable + MX + SMTP + catch-all,
 //                 so it reflects real mailbox-level deliverability (slower; needs
 //                 outbound port 25).
 app.post('/bounce/csv', authenticateToken, upload.single('file'), async (req, res) => {
@@ -1062,7 +1062,7 @@ app.post('/billing/checkout', authenticateToken, billingLimiter, async (req, res
     const pack = packById(req.body.packId);
     if (!pack) return res.status(400).json({ error: 'Unknown credit pack' });
     // Where Stripe sends the buyer after checkout. Never trust the Origin header
-    // blindly — a forged Origin would let an attacker bounce a paying user to
+    // blindly - a forged Origin would let an attacker bounce a paying user to
     // their own site. FRONTEND_URL wins; otherwise the Origin is accepted only
     // if it's on the CORS allow-list (or no allow-list is configured = dev).
     const reqOrigin = String(req.headers.origin || '');
@@ -1101,7 +1101,7 @@ app.post('/billing/manual', authenticateToken, billingLimiter, async (req, res) 
 Ref: ${reference}
 User: ${user && user.email} (id ${req.user.id})
 Method: ${method}
-Pack: ${pack.name} — ${pack.credits.toLocaleString()} credits — ${pack.price} ${pack.currency}`;
+Pack: ${pack.name} - ${pack.credits.toLocaleString()} credits - ${pack.price} ${pack.currency}`;
     const adminTo = process.env.BILLING_NOTIFY_EMAIL || process.env.ADMIN_EMAIL || '';
     try { if (adminTo) await sendMail({ to: adminTo, subject: `[BounceCure] Manual payment ${reference}`, text: summary }); }
     catch (e) { console.error('Manual payment notice failed:', e.message); }
@@ -1128,7 +1128,7 @@ app.get('/verify/status/:jobId', authenticateToken, (req, res) => {
 // --- History / Tasks Endpoints (Protected) ---
 
 // List past execution batches for the logged-in user within the retention
-// window. Summaries only (no per-address results) — fetch a single batch's
+// window. Summaries only (no per-address results) - fetch a single batch's
 // results via GET /history/:id.
 // Optional query: ?type=single|bulk|csv  &  ?limit=N (default 50, max 500)
 app.get('/history', authenticateToken, async (req, res) => {
@@ -1159,7 +1159,7 @@ app.get('/history/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// Delete one of the logged-in user's own batches. SUPERADMIN ONLY — deleting
+// Delete one of the logged-in user's own batches. SUPERADMIN ONLY - deleting
 // history is a privileged action, so a plain user or admin cannot do it (checked
 // server-side against the live role, not just hidden in the UI). Still scoped to
 // req.user.id, so it only ever removes the caller's own batch.
@@ -1218,7 +1218,7 @@ app.get('/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
     }
 });
 
-// A plain admin may never see or act on a superadmin — treat as not found.
+// A plain admin may never see or act on a superadmin - treat as not found.
 const targetHiddenFromViewer = (targetRole, viewerRole) =>
     targetRole === 'superadmin' && viewerRole !== 'superadmin';
 
@@ -1320,7 +1320,7 @@ app.delete('/admin/users/:id', authenticateToken, requireAdmin, async (req, res)
 
 // --- Serve the built frontend (optional; makes the app self-contained) ---
 // If frontend/dist exists, this one server handles BOTH the API and the web app.
-// Then your reverse proxy only needs to forward everything to this process — no
+// Then your reverse proxy only needs to forward everything to this process - no
 // per-path proxy rules to maintain (a missing /history or /admin rule is exactly
 // what makes Tasks & Results fail with "unexpected response HTTP 200"). The API
 // routes above always take precedence; anything else falls back to index.html.
@@ -1332,12 +1332,12 @@ if (fs.existsSync(DIST_DIR)) {
         if (req.method !== 'GET' || API_PREFIX_RE.test(req.path)) return next();
         res.sendFile(require('path').join(DIST_DIR, 'index.html'));
     });
-    console.log('[Web] Serving frontend from frontend/dist — you can proxy everything to this port.');
+    console.log('[Web] Serving frontend from frontend/dist - you can proxy everything to this port.');
 } else {
-    console.log('[Web] frontend/dist not found — running API-only (serve the frontend separately).');
+    console.log('[Web] frontend/dist not found - running API-only (serve the frontend separately).');
 }
 
-// Error handler — turns upload/multer and other errors into clean JSON responses
+// Error handler - turns upload/multer and other errors into clean JSON responses
 // instead of leaking stack traces via the default HTML error page.
 app.use((err, req, res, next) => {
     if (err instanceof multer.MulterError || err.message === 'Only CSV or TXT files are allowed') {

@@ -21,12 +21,12 @@ try {
 
         transporter = nodemailer.createTransport(opts);
         enabled = true;
-        console.log(`[Mail] SMTP configured (${SMTP_HOST}:${port}) — password-reset emails enabled.`);
+        console.log(`[Mail] SMTP configured (${SMTP_HOST}:${port}) - password-reset emails enabled.`);
     } else {
-        console.warn('[Mail] SMTP not configured — reset links will be logged to the console.');
+        console.warn('[Mail] SMTP not configured - reset links will be logged to the console.');
     }
 } catch (e) {
-    console.warn('[Mail] nodemailer unavailable — reset links will be logged:', e.message);
+    console.warn('[Mail] nodemailer unavailable - reset links will be logged:', e.message);
 }
 
 const isEmailEnabled = () => enabled;
@@ -56,7 +56,7 @@ function resetEmailHtml(link) {
             <a href="${link}" style="color:#4f46e5;word-break:break-all;">${link}</a>
           </p>
           <p style="font-size:12px;color:#94a3b8;line-height:1.6;margin:16px 0 8px;">
-            Didn't request this? You can safely ignore this email — your password won't change.
+            Didn't request this? You can safely ignore this email; your password won't change.
           </p>
         </td></tr>
       </table>

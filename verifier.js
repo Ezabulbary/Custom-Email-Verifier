@@ -42,7 +42,7 @@ function isPrivateIP(ip, family) {
 
 // Resolve an MX host to a PUBLIC IP and return that IP (or null if it resolves
 // to a private/internal range or can't be resolved). Returning the concrete IP
-// lets the caller connect to it directly — closing the TOCTOU / DNS-rebinding
+// lets the caller connect to it directly - closing the TOCTOU / DNS-rebinding
 // hole where a second, connect-time DNS lookup could return an internal address
 // after this guard passed.
 async function resolvePublicMxIp(host) {
@@ -100,7 +100,7 @@ function normalizeMessage(msg) {
 //   invalid    - mailbox does not exist / domain rejects mail (will bounce)
 //   inbox_full - mailbox exists but is over quota (may soft-bounce)
 //   disabled   - mailbox existed but has been disabled / suspended
-//   spamtrap   - address used to catch spammers — never send to it
+//   spamtrap   - address used to catch spammers - never send to it
 //   unknown    - server gave no definitive answer (greylisting, blocked port, …)
 const STATUSES = ['safe', 'role', 'catch-all', 'disposable', 'invalid', 'inbox_full', 'disabled', 'spamtrap', 'unknown'];
 
@@ -221,7 +221,7 @@ async function verifyEmail(email) {
     if (isSpamtrapDomain(domain)) {
         result.status = 'spamtrap';
         result.confidence = 90;
-        result.reason = 'Known spam-trap domain — do not send';
+        result.reason = 'Known spam-trap domain. Do not send';
         return result;
     }
 
@@ -246,7 +246,7 @@ async function verifyEmail(email) {
     // 4. Provider detection (drives provider-specific deep checks below)
     result.provider = detectProvider(result.mxRecords);
 
-    // 5. Microsoft 365 deep check — resolves mailboxes even on catch-all tenants
+    // 5. Microsoft 365 deep check - resolves mailboxes even on catch-all tenants
     let m365 = null;
     if (result.provider === 'microsoft365') {
         m365 = await checkMicrosoft365(email);
@@ -294,7 +294,7 @@ async function verifyEmail(email) {
     if (smtpClass === 'spamtrap') {
         result.status = 'spamtrap';
         result.confidence = 85;
-        result.reason = 'Address flagged as a spam trap — do not send';
+        result.reason = 'Address flagged as a spam trap. Do not send';
         return result;
     }
     if (smtpClass === 'inbox_full') {
@@ -373,7 +373,7 @@ async function verifyEmail(email) {
         } else {
             result.status = 'catch-all';
             result.confidence = 40;
-            result.reason = 'Domain accepts all emails (catch-all) — deliverability uncertain';
+            result.reason = 'Domain accepts all emails (catch-all); deliverability uncertain';
         }
         return result;
     }
@@ -427,7 +427,7 @@ async function quickVerify(email) {
 
 // --- Catch-all-only verification --------------------------------------------
 // A dedicated pass for the "Catch-All Verifier": it runs the full check, but is
-// only meaningful for CATCH-ALL domains — the hard case standard verifiers flag
+// only meaningful for CATCH-ALL domains - the hard case standard verifiers flag
 // as "risky". For a catch-all domain we try to RESOLVE the individual mailbox
 // using every deep signal verifyEmail already gathers (Microsoft 365 API, and
 // whether the server's reply for the real address differs from a random probe),
@@ -442,17 +442,17 @@ async function verifyCatchAll(email) {
     // even determine catch-all status, so keep 'unknown' rather than mislabel it.
     if (r.status === 'unknown') return r;
 
-    // Conclusive verdicts that don't depend on catch-all — pass through as-is.
+    // Conclusive verdicts that don't depend on catch-all - pass through as-is.
     if (['invalid', 'disposable', 'spamtrap', 'inbox_full', 'disabled'].includes(r.status)) return r;
 
     // In scope: a catch-all domain. verifyEmail sets isCatchAll=true when every
-    // random probe was accepted — even if it then resolved the real mailbox to
+    // random probe was accepted - even if it then resolved the real mailbox to
     // safe/role via a deeper signal (Microsoft 365, reply-differencing).
     if (r.isCatchAll || r.status === 'catch-all') return r;
 
-    // Otherwise it's a normal (non-catch-all) mailbox that resolved cleanly —
+    // Otherwise it's a normal (non-catch-all) mailbox that resolved cleanly -
     // out of scope for this tool.
-    return { ...r, status: 'not_catch_all', reason: 'Not a catch-all domain — use standard verification' };
+    return { ...r, status: 'not_catch_all', reason: 'Not a catch-all domain. Use standard verification' };
 }
 
 module.exports = { verifyEmail, quickVerify, verifyCatchAll, statusBucket, isRoleAddress, classifySmtpMessage, STATUSES };
