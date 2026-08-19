@@ -7,7 +7,7 @@ const TIMEOUT_MS = Number(process.env.SMTP_TIMEOUT_MS) || 12000;
 // server by its HELO name and MAIL FROM. A fake domain gets greylisted/blocked
 // and returns "unknown". Set VERIFY_HELO_DOMAIN to a REAL domain you control
 // (ideally the reverse-DNS/PTR of this server's IP, with an SPF record), and
-// VERIFY_MAIL_FROM to a real-looking sender on it. See ACCURACY.md.
+// VERIFY_MAIL_FROM to a real-looking sender on it. See README.md §4.
 const HELO_DOMAIN = (process.env.VERIFY_HELO_DOMAIN || 'verify.example.com').trim();
 const MAIL_FROM = (process.env.VERIFY_MAIL_FROM || `verify@${HELO_DOMAIN}`).trim();
 

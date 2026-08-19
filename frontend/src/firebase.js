@@ -24,7 +24,7 @@ let authPromise = null;
 // Lazily initialise Firebase Auth the first time it's needed.
 async function getAuthInstance() {
   if (!isFirebaseConfigured) {
-    throw new Error('Google sign-in is not configured. Add your Firebase keys in frontend/.env (see SETUP.md).');
+    throw new Error('Google sign-in is not configured. Add your Firebase keys in frontend/.env (see README.md §6).');
   }
   if (!authPromise) {
     authPromise = (async () => {

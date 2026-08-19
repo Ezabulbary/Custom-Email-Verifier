@@ -189,7 +189,7 @@ let port25Open = null; // null = unknown/checking, true/false once probed
             console.warn('       "unknown" and accuracy will be LOW (this is the #1 cause of');
             console.warn('       poor results). Fixes: ask your host to unblock port 25, run');
             console.warn('       on a host that allows it, or plug in a verification API.');
-            console.warn('       See ACCURACY.md.');
+            console.warn('       See README.md §4.');
             console.warn('==================================================================');
         }
     };

@@ -394,6 +394,6 @@ A full review was performed; recorded findings and fixes:
 
 ---
 
-*Changelog lives in `WHATS-NEW.md`. This README supersedes the previous
-SETUP.md, DEPLOYMENT.md, DEPLOY-STEPS.md, FIRESTORE-SETUP.md, ACCURACY.md and
-SECURITY.md.*
+*This README is the project's single guide — the earlier separate docs
+(setup, deployment, Firestore, accuracy, security, changelog) were merged
+into it and removed.*

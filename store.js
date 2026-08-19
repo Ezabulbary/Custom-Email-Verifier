@@ -463,14 +463,14 @@ function firestoreStore() {
 // ===========================================================================
 
 // This app stores ALL data in Cloud Firestore. A Firebase service account must
-// be configured (see FIRESTORE-SETUP.md); there is no local-database fallback.
+// be configured (see README.md §3a); there is no local-database fallback.
 if (!isFirestoreEnabled()) {
     console.error('\n[FATAL] Cloud Firestore is required but not configured.');
     console.error('  Add a Firebase service account and try again:');
     console.error('    1. Put serviceAccount.json in the project root, OR set');
     console.error('       FIREBASE_SERVICE_ACCOUNT / GOOGLE_APPLICATION_CREDENTIALS');
     console.error('    2. Create the Firestore database in the Firebase console');
-    console.error('  See FIRESTORE-SETUP.md for step-by-step instructions.\n');
+    console.error('  See README.md §3a for step-by-step instructions.\n');
     process.exit(1);
 }
 
