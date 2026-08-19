@@ -1444,6 +1444,62 @@ const ColumnMapModal = ({ file, ctaLabel = 'Start Verification', onCancel, onSta
   );
 };
 
+// Educational "learn" section shown at the bottom of the Email Verification
+// page — explains what verification is, how to read a result, and why it matters.
+const VERIFY_SIGNALS = [
+  { icon: CheckCircle2, name: 'Syntax', desc: 'Confirms the address is formatted correctly before anything else.' },
+  { icon: MailCheck, name: 'Deliverability', desc: 'Checks the address can actually receive mail.' },
+  { icon: Shield, name: 'MX records', desc: "Verifies the domain's mail server accepts email." },
+  { icon: AlertCircle, name: 'Catch-all', desc: 'Flags domains that accept everything but may go unread.' },
+  { icon: Trash2, name: 'Disposable', desc: 'Detects temporary or throwaway addresses.' },
+  { icon: ShieldCheck, name: 'Spam traps', desc: 'Identifies addresses that can blacklist your domain.' },
+  { icon: Clock, name: 'Full inbox', desc: 'Spots accounts that are likely abandoned.' },
+  { icon: User, name: 'Free provider', desc: 'Marks Gmail, Yahoo and other free addresses.' },
+];
+const VERIFY_WHY = [
+  { icon: Star, title: 'Improve sender reputation', desc: 'Sending to invalid or inactive addresses pushes your bounce rate up, and mailbox providers notice. Verifying each address keeps bounces low and your reputation intact, so future emails keep landing in the inbox.' },
+  { icon: Zap, title: 'Increase deliverability', desc: 'Risky addresses, full inboxes and dead domains all drag deliverability down. The verifier flags these before they cost you, so you only send to addresses worth sending to — lifting open and reply rates over time.' },
+  { icon: ShieldCheck, title: 'Avoid spam folders', desc: 'Poor list quality, fake addresses and spam traps push messages into spam and trigger filters. Send to a clean, verified list and far more of your outreach lands where people actually read it.' },
+];
+
+const VerificationGuide = () => (
+  <div className="vguide">
+    <div className="card vguide-hero">
+      <div className="vguide-hero-icon"><MailCheck size={26} /></div>
+      <div>
+        <h3>What is email verification?</h3>
+        <p>Email verification checks whether an address exists, is active and is safe to send to — looking at its syntax, domain, mail server and the risk signals tied to it. The goal is simple: confirm a real person sits behind the inbox before you hit send. Sending to bad addresses drives up bounces and quietly damages your sender reputation, so verifying first keeps your list clean and your emails landing where they should.</p>
+      </div>
+    </div>
+
+    <div className="vguide-section">
+      <h3>How to read your result</h3>
+      <p className="muted">Every check returns a clear verdict and a confidence score from 0–100. A score in the 90s means the address is safe to send to. Below that, each signal is broken down so you see exactly <em>why</em> an address is safe or risky — not just a pass or fail.</p>
+      <div className="vguide-signals">
+        {VERIFY_SIGNALS.map((s) => (
+          <div className="vguide-signal" key={s.name}>
+            <span className="vguide-signal-icon"><s.icon size={18} /></span>
+            <div><strong>{s.name}</strong><span>{s.desc}</span></div>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    <div className="vguide-section">
+      <h3>Why email verification matters</h3>
+      <div className="vguide-why">
+        {VERIFY_WHY.map((w) => (
+          <div className="card vguide-why-card" key={w.title}>
+            <div className="vguide-why-icon"><w.icon size={22} /></div>
+            <h4>{w.title}</h4>
+            <p>{w.desc}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+);
+
 const EmailVerification = () => {
   const { refreshUser } = useAuth();
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -1593,6 +1649,8 @@ const EmailVerification = () => {
       {results.length > 0 && <ResultsTable results={results} title={resultsTitle} />}
 
       <HistoryPanel version={historyVersion} />
+
+      <VerificationGuide />
     </div>
   );
 };
