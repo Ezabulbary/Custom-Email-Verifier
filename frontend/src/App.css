@@ -1084,7 +1084,7 @@
 /* --- Buy Credits / Billing --- */
 .bill-h { font-size: 1.05rem; font-weight: 700; margin: 1.75rem 0 0.9rem; color: var(--text-primary); }
 .bill-h:first-of-type { margin-top: 0.5rem; }
-.bill-packs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.85rem; }
+.bill-packs { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0.85rem; max-width: 640px; }
 .bill-pack { text-align: left; padding: 1.1rem 1.15rem; border-radius: 14px; border: 1.5px solid var(--border-color); background: var(--bg-surface); transition: all 0.15s ease; }
 .bill-pack:hover { border-color: #c7d2fe; }
 .bill-pack.active { border-color: var(--accent-color); background: #f5f3ff; box-shadow: 0 0 0 3px rgba(124,58,237,0.10); }
@@ -1093,6 +1093,13 @@
 .bill-pack-credits span { font-size: 0.75rem; font-weight: 500; color: var(--text-secondary); }
 .bill-pack-price { font-size: 1.5rem; font-weight: 800; color: var(--accent-color); margin-top: 0.4rem; }
 .bill-pack-unit { font-size: 0.75rem; color: var(--text-secondary); }
+.bill-pack { position: relative; }
+.bill-pack-tag { position: absolute; top: -10px; right: 12px; background: var(--brand-gradient, linear-gradient(135deg,#4f46e5,#7c3aed)); color: #fff; font-size: 0.68rem; font-weight: 700; padding: 0.2rem 0.6rem; border-radius: 99px; }
+
+/* Admin: clickable user rows + account-id chip */
+.admin-user-row { cursor: pointer; }
+.admin-user-row:hover td { background: var(--bg-surface-hover); }
+.admin-uid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; background: #eef2ff; color: #4338ca; padding: 0.2rem 0.55rem; border-radius: 8px; white-space: nowrap; }
 
 .bill-methods { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.85rem; }
 .bill-method { display: flex; align-items: center; gap: 0.7rem; text-align: left; padding: 0.9rem 1rem; border-radius: 12px; border: 1.5px solid var(--border-color); background: var(--bg-surface); color: var(--text-secondary); transition: all 0.15s ease; }

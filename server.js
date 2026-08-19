@@ -35,6 +35,7 @@ const loginLimiter  = rateLimit({ name: 'login',  windowMs: 15 * 60 * 1000, max:
 const twofaLimiter  = rateLimit({ name: '2fa',    windowMs: 15 * 60 * 1000, max: 15, message: 'Too many 2FA attempts. Please wait a few minutes.' });
 const registerLimiter = rateLimit({ name: 'reg',  windowMs: 60 * 60 * 1000, max: 15, message: 'Too many accounts created from this network. Please try later.' });
 const resetLimiter  = rateLimit({ name: 'reset',  windowMs: 60 * 60 * 1000, max: 10, message: 'Too many password-reset requests. Please try later.' });
+const billingLimiter = rateLimit({ name: 'billing', windowMs: 60 * 60 * 1000, max: 20, message: 'Too many payment requests. Please try later.' });
 
 const app = express();
 
@@ -60,11 +61,11 @@ const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.tr
 app.use(cors(allowedOrigins.length ? { origin: allowedOrigins } : {}));
 
 // --- Billing: credit packs (server is the source of truth for prices) ---
+// These MUST mirror the public pricing page (Free is the 100-credit signup
+// bonus and isn't purchasable): Starter $19 → 10,000 credits, Pro $49 → 50,000.
 const CREDIT_PACKS = [
-    { id: 'starter', name: 'Starter',    credits: 1000,   price: 5,   currency: 'USD' },
-    { id: 'growth',  name: 'Growth',     credits: 10000,  price: 40,  currency: 'USD' },
-    { id: 'pro',     name: 'Pro',        credits: 50000,  price: 150, currency: 'USD' },
-    { id: 'scale',   name: 'Scale',      credits: 250000, price: 500, currency: 'USD' },
+    { id: 'starter', name: 'Starter', credits: 10000, price: 19, currency: 'USD', tag: 'Most popular' },
+    { id: 'pro',     name: 'Pro',     credits: 50000, price: 49, currency: 'USD', tag: null },
 ];
 const packById = (id) => CREDIT_PACKS.find(p => p.id === id) || null;
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
@@ -75,18 +76,32 @@ const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 // completed checkout it credits the buyer's account by the pack's credits.
 app.post('/billing/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     if (!STRIPE_WEBHOOK_SECRET) return res.status(400).send('Webhook not configured');
-    const sig = req.headers['stripe-signature'] || '';
-    // Signature header looks like: t=timestamp,v1=hexmac[,v1=...]
-    const parts = Object.fromEntries(sig.split(',').map(kv => kv.split('=')));
-    const ts = parts.t;
+    const sig = String(req.headers['stripe-signature'] || '');
     const payload = req.body; // Buffer (raw)
-    if (!ts || !parts.v1) return res.status(400).send('Bad signature');
+
+    // Header format: t=timestamp,v1=hexmac[,v1=hexmac...] — during a secret roll
+    // Stripe sends MULTIPLE v1 signatures, so collect them all and accept if any
+    // matches (each compared in constant time).
+    let ts = null; const sigs = [];
+    for (const kv of sig.split(',')) {
+        const i = kv.indexOf('=');
+        if (i === -1) continue;
+        const k = kv.slice(0, i).trim(), v = kv.slice(i + 1).trim();
+        if (k === 't') ts = v;
+        else if (k === 'v1') sigs.push(v);
+    }
+    if (!ts || sigs.length === 0) return res.status(400).send('Bad signature');
+
+    // Replay window: reject events whose signed timestamp is older/newer than
+    // 5 minutes, so a captured request can't be replayed later.
+    if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) {
+        return res.status(400).send('Timestamp outside tolerance');
+    }
+
     const expected = crypto.createHmac('sha256', STRIPE_WEBHOOK_SECRET)
         .update(`${ts}.${payload.toString('utf8')}`).digest('hex');
-    // Constant-time compare against the provided v1 signature.
-    const provided = parts.v1;
-    const ok = provided.length === expected.length &&
-        crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    const ok = sigs.some(provided => provided.length === expected.length &&
+        crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected)));
     if (!ok) return res.status(400).send('Signature verification failed');
 
     let event;
@@ -96,10 +111,25 @@ app.post('/billing/stripe/webhook', express.raw({ type: 'application/json' }), a
         const s = event.data.object || {};
         const userId = (s.metadata && s.metadata.userId) || s.client_reference_id;
         const credits = parseInt(s.metadata && s.metadata.credits, 10);
-        if (userId && credits > 0) {
-            try { await store.adjustCredits(userId, credits); }
-            catch (e) { console.error('[Billing] credit grant failed:', e.message); }
-            console.log(`[Billing] Granted ${credits} credits to user ${userId} (Stripe ${s.id}).`);
+        // TEST-MODE events never grant credits — only a REAL (live-mode) payment
+        // whose session actually completed as paid adds credits to the account.
+        if (event.livemode !== true) {
+            console.log(`[Billing] Ignored TEST-mode Stripe event ${event.id || ''} — no credits granted.`);
+        } else if (s.payment_status && s.payment_status !== 'paid') {
+            console.log(`[Billing] Session ${s.id} completed but payment_status=${s.payment_status} — no credits granted.`);
+        } else if (userId && credits > 0) {
+            // Idempotency: Stripe retries deliveries, and a duplicate must never
+            // grant credits twice. claimBillingEvent() succeeds only the FIRST
+            // time this event id is seen.
+            const firstTime = await store.claimBillingEvent(event.id || `${s.id}:completed`);
+            if (!firstTime) {
+                console.log(`[Billing] Duplicate Stripe event ${event.id} ignored.`);
+            } else {
+                try {
+                    await store.adjustCredits(userId, credits);
+                    console.log(`[Billing] Granted ${credits} credits to user ${userId} (Stripe ${s.id}).`);
+                } catch (e) { console.error('[Billing] credit grant failed:', e.message); }
+            }
         }
     }
     res.json({ received: true });
@@ -640,6 +670,7 @@ app.post('/verify', authenticateToken, async (req, res) => {
         // Charge only for a conclusive verdict; refund the reserved credit otherwise.
         const charge = CHARGEABLE.has(result.status) ? 1 : 0;
         if (!charge) await store.adjustCredits(req.user.id, 1);
+        else await store.addUsedCredits(req.user.id, 1);
         const batch = await saveBatch(req.user.id, 'single', [result], (req.body.name || '').toString().slice(0, 120) || null);
 
         res.json({ ...result, charged: charge, batchId: batch && batch.id, batchNumber: batch && batch.batchNumber });
@@ -700,6 +731,7 @@ async function runJob(job) {
             const charge = Math.min(chargeableCount(job.results), job.reserved || 0);
             const refund = (job.reserved || 0) - charge;
             if (refund > 0) await store.adjustCredits(job.userId, refund);
+            if (charge > 0) await store.addUsedCredits(job.userId, charge);
             job.charged = charge;
         } else {
             job.charged = 0;
@@ -798,8 +830,12 @@ function csvOptsFromBody(body = {}) {
     const dedupe = !(body.dedupe === '0' || body.dedupe === 'false' || body.dedupe === false);
     let labels = null;
     if (body.labels) {
-        try { const p = JSON.parse(body.labels); if (Array.isArray(p)) labels = p.map(x => (x == null ? '' : String(x))); }
-        catch { /* ignore malformed labels */ }
+        // Cap both the column count and each label's length so a hostile client
+        // can't inflate memory or the exported CSV with a giant labels array.
+        try {
+            const p = JSON.parse(body.labels);
+            if (Array.isArray(p)) labels = p.slice(0, 256).map(x => (x == null ? '' : String(x).slice(0, 120)));
+        } catch { /* ignore malformed labels */ }
     }
     return { emailCol, hasHeader, dedupe, labels };
 }
@@ -956,6 +992,7 @@ app.post('/catchall', authenticateToken, async (req, res) => {
         catch (e) { await store.adjustCredits(req.user.id, 1); throw e; }
         const charge = isChargeable(result.status) ? 1 : 0;
         if (!charge) await store.adjustCredits(req.user.id, 1);
+        else await store.addUsedCredits(req.user.id, 1);
         const batch = await saveBatch(req.user.id, 'catchall', [result], (req.body.name || '').toString().slice(0, 120) || null);
         res.json({ ...result, charged: charge, batchId: batch && batch.id, batchNumber: batch && batch.batchNumber });
     } catch (err) {
@@ -1020,11 +1057,17 @@ function stripeCreateCheckout(form) {
     });
 }
 
-app.post('/billing/checkout', authenticateToken, async (req, res) => {
+app.post('/billing/checkout', authenticateToken, billingLimiter, async (req, res) => {
     if (!STRIPE_SECRET_KEY) return res.status(400).json({ error: 'Card payments are not configured yet. Please use Wise or bank transfer.' });
     const pack = packById(req.body.packId);
     if (!pack) return res.status(400).json({ error: 'Unknown credit pack' });
-    const origin = process.env.FRONTEND_URL || req.headers.origin || '';
+    // Where Stripe sends the buyer after checkout. Never trust the Origin header
+    // blindly — a forged Origin would let an attacker bounce a paying user to
+    // their own site. FRONTEND_URL wins; otherwise the Origin is accepted only
+    // if it's on the CORS allow-list (or no allow-list is configured = dev).
+    const reqOrigin = String(req.headers.origin || '');
+    const origin = process.env.FRONTEND_URL
+        || (allowedOrigins.length ? (allowedOrigins.includes(reqOrigin) ? reqOrigin : '') : reqOrigin);
     try {
         const session = await stripeCreateCheckout({
             mode: 'payment',
@@ -1048,7 +1091,7 @@ app.post('/billing/checkout', authenticateToken, async (req, res) => {
 // Wise / international bank transfer: record the intent, notify ops, and hand
 // back a reference the buyer puts in the payment note. An admin adds the credits
 // once the transfer clears (via the Admin Panel).
-app.post('/billing/manual', authenticateToken, async (req, res) => {
+app.post('/billing/manual', authenticateToken, billingLimiter, async (req, res) => {
     const pack = packById(req.body.packId);
     const method = ['wise', 'bank'].includes(req.body.method) ? req.body.method : null;
     if (!pack || !method) return res.status(400).json({ error: 'Invalid request' });
@@ -1185,6 +1228,27 @@ const readId = (raw) => {
     const id = (raw == null ? '' : String(raw)).trim();
     return id || null;
 };
+
+// Lifetime history for one user: profile + lifetime counters + their stored
+// executions (batches inside the retention window; lifetime totals are kept on
+// the user document so they survive the 30-day batch cleanup).
+app.get('/admin/users/:id/history', authenticateToken, requireAdmin, async (req, res) => {
+    const id = readId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid input' });
+    try {
+        const targetRole = await store.getRoleById(id);
+        if (targetRole === null || targetHiddenFromViewer(targetRole, req.viewerRole)) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        const user = await store.adminUserDetail(id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        const batches = await store.listBatches(id, { type: null, limit: 500 });
+        res.json({ user, batches, retentionDays: HISTORY_RETENTION_DAYS });
+    } catch (e) {
+        console.error('Admin user history error:', e.message);
+        res.status(500).json({ error: 'Failed to load user history' });
+    }
+});
 
 // Adjust a user's credits by a (positive or negative) delta.
 app.post('/admin/users/:id/credits', authenticateToken, requireAdmin, async (req, res) => {

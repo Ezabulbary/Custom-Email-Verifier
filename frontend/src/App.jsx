@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
-import { Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useLocation, useParams, Link } from 'react-router-dom';
 import { List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Star, Quote, Phone, User, Lock, Eye, EyeOff, Smartphone } from 'lucide-react';
 import './App.css';
 import { googleSignIn } from './firebase';
@@ -630,7 +630,9 @@ const PricingCards = () => (
         <ul className="pricing-features">
           {p.features.map((f, i) => <li key={i}><CheckCircle2 size={16} color="#059669"/> {f}</li>)}
         </ul>
-        <Link to="/register" className={p.highlight ? 'btn-primary' : 'btn-secondary'} style={{width:'100%', justifyContent:'center'}}>
+        {/* Paid plans go straight to the in-app Buy Credits page (login first if
+            needed); the free plan goes to registration. */}
+        <Link to={p.price === '0' ? '/register' : '/dashboard/billing'} className={p.highlight ? 'btn-primary' : 'btn-secondary'} style={{width:'100%', justifyContent:'center'}}>
           {p.price === '0' ? 'Start Free' : 'Choose ' + p.name}
         </Link>
       </div>
@@ -1252,7 +1254,8 @@ const PAGE_TITLES = {
 const DashboardLayout = ({ children }) => {
   const { user } = useAuth();
   const location = useLocation();
-  const pageTitle = PAGE_TITLES[location.pathname] || '';
+  const pageTitle = PAGE_TITLES[location.pathname]
+    || (location.pathname.startsWith('/admin/user/') ? 'User History' : '');
 
   return (
     <div className="dashboard-container animate-fade-in">
@@ -1979,7 +1982,7 @@ const CatchAllVerifier = () => {
 const BillingPage = () => {
   const { user, refreshUser } = useAuth();
   const [cfg, setCfg] = useState(null);
-  const [packId, setPackId] = useState('growth');
+  const [packId, setPackId] = useState('starter');
   const [method, setMethod] = useState('stripe');
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState(() => {
@@ -2039,10 +2042,11 @@ const BillingPage = () => {
       <div className="bill-packs">
         {cfg.packs.map(p => (
           <button key={p.id} className={`bill-pack ${packId === p.id ? 'active' : ''}`} onClick={() => setPackId(p.id)}>
+            {p.tag && <div className="bill-pack-tag">{p.tag}</div>}
             <div className="bill-pack-name">{p.name}</div>
             <div className="bill-pack-credits">{p.credits.toLocaleString()} <span>credits</span></div>
             <div className="bill-pack-price">${p.price}</div>
-            <div className="bill-pack-unit">${(p.price / p.credits * 1000).toFixed(2)} / 1k</div>
+            <div className="bill-pack-unit">${(p.price / p.credits * 1000).toFixed(2)} / 1k · same as the pricing page</div>
           </button>
         ))}
       </div>
@@ -2814,6 +2818,7 @@ const ROLE_LABELS = { user: 'User', admin: 'Admin', superadmin: 'Super Admin' };
 
 const AdminPanel = () => {
   const { user, refreshUser } = useAuth();
+  const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -2896,14 +2901,17 @@ const AdminPanel = () => {
         ) : (
           <div style={{overflowX:'auto'}}>
             <table className="results-table">
-              <thead><tr><th>ID</th><th>Email</th><th>Role</th><th>Add Credits</th><th>Verified</th><th>Joined</th><th>Actions</th></tr></thead>
+              <thead><tr><th>ID</th><th>Joined</th><th>Email</th><th>Role</th><th>Add Credits</th><th>Total Credits</th><th>Used Credits</th><th>Actions</th></tr></thead>
               <tbody>
                 {users.map(u => (
-                  <tr key={u.id}>
-                    <td>{u.id}</td>
+                  <tr key={u.id} className="admin-user-row" title="Open this user's lifetime history"
+                      onClick={() => navigate(`/admin/user/${encodeURIComponent(u.id)}`)}>
+                    <td><span className="admin-uid">{u.displayId || u.id}</span></td>
+                    <td style={{color:'var(--text-secondary)', fontSize:'0.85rem'}}>{u.created_at ? formatDate(u.created_at) : '—'}</td>
                     <td><strong>{u.email}</strong>{u.id === user.id && <span style={{color:'var(--text-secondary)', fontWeight:400}}> (you)</span>}</td>
                     <td><span className={`badge role-${u.role || 'user'}`}>{ROLE_LABELS[u.role] || 'User'}</span></td>
-                    <td>
+                    {/* The Add Credits cell is a control — clicking it must NOT open the history page. */}
+                    <td onClick={(e) => e.stopPropagation()} style={{cursor:'default'}}>
                       <div style={{display:'flex', alignItems:'center', gap:'0.35rem'}}>
                         <button className="icon-btn" title="Decrease amount by 100" onClick={() => stepAdd(u.id, -100)}><Minus size={14}/></button>
                         <input
@@ -2921,9 +2929,9 @@ const AdminPanel = () => {
                         {credFlash[u.id] && <span className="cred-flash">{credFlash[u.id]}</span>}
                       </div>
                     </td>
-                    <td>{u.emails_verified}</td>
-                    <td style={{color:'var(--text-secondary)', fontSize:'0.85rem'}}>{u.created_at ? formatDate(u.created_at) : '—'}</td>
-                    <td>
+                    <td title="Lifetime credits (current balance + used)"><strong>{(u.total_credits ?? u.credits ?? 0).toLocaleString()}</strong></td>
+                    <td title="Credits spent on verifications">{(u.used_credits ?? 0).toLocaleString()}</td>
+                    <td onClick={(e) => e.stopPropagation()} style={{cursor:'default'}}>
                       <div style={{display:'flex', gap:'0.4rem', alignItems:'center'}}>
                         <select
                           className="role-select"
@@ -2948,6 +2956,94 @@ const AdminPanel = () => {
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+// Per-user lifetime history — opened by clicking a row in the Admin Panel.
+const AdminUserHistory = () => {
+  const { uid } = useParams();
+  const navigate = useNavigate();
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    apiFetch(`/admin/users/${encodeURIComponent(uid)}/history`)
+      .then(d => { if (!alive) return; d.error ? setError(d.error) : setData(d); })
+      .catch(e => { if (alive) setError(friendlyError(e)); });
+    return () => { alive = false; };
+  }, [uid]);
+
+  const u = data && data.user;
+  return (
+    <div>
+      <button className="btn-secondary" onClick={() => navigate('/admin')} style={{ marginBottom: '1.25rem' }}>
+        <ChevronRight size={16} style={{ transform: 'rotate(180deg)' }} /> Back to Admin Panel
+      </button>
+
+      {error && <div className="bill-notice err"><AlertCircle size={18} /><div>{error}</div></div>}
+      {!data && !error && <p className="muted"><Loader2 className="loader" size={16} /> Loading user history…</p>}
+
+      {u && (
+        <>
+          <div className="card" style={{ padding: '1.5rem', marginBottom: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <h3 style={{ fontSize: '1.15rem' }}>{u.email}</h3>
+              <span className={`badge role-${u.role || 'user'}`}>{ROLE_LABELS[u.role] || 'User'}</span>
+              <span className="admin-uid">{u.displayId || u.id}</span>
+            </div>
+            <div className="muted-inline" style={{ marginTop: '0.35rem', display: 'block' }}>
+              Joined {u.created_at ? formatDate(u.created_at) : '—'}
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+            <StatCard label="Current Balance" value={(u.credits ?? 0).toLocaleString()} accent="#059669" />
+            <StatCard label="Used Credits" value={(u.used_credits ?? 0).toLocaleString()} accent="#d97706" />
+            <StatCard label="Total Credits" value={(u.total_credits ?? 0).toLocaleString()} accent="var(--accent-color)" />
+            <StatCard label="Lifetime Verifications" value={(u.emails_verified ?? 0).toLocaleString()} />
+            <StatCard label="Lifetime Executions" value={(u.executions ?? 0).toLocaleString()} />
+          </div>
+
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="history-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <History size={18} color="var(--accent-color)" />
+                <h3 style={{ fontSize: '1.05rem' }}>Executions ({(data.batches || []).length})</h3>
+              </div>
+              <span className="muted-inline">Stored results are kept for {data.retentionDays} days; the totals above are lifetime.</span>
+            </div>
+            {(data.batches || []).length === 0 ? (
+              <div className="history-empty">No stored executions in the last {data.retentionDays} days.</div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="results-table">
+                  <thead><tr><th>Task</th><th>Type</th><th>Date</th><th>Total</th><th>Breakdown</th></tr></thead>
+                  <tbody>
+                    {data.batches.map(b => (
+                      <tr key={b.id}>
+                        <td><strong>{b.name || `#${b.batchNumber ?? b.id}`}</strong></td>
+                        <td><span className={`badge type-${b.type}`}>{TYPE_LABELS[b.type] || b.type}</span></td>
+                        <td style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{formatDate(b.createdAt)}</td>
+                        <td>{(b.total || 0).toLocaleString()}</td>
+                        <td>
+                          <div className="pill-row">
+                            <CountPill label="Valid" value={b.counts.valid} cls="valid" />
+                            <CountPill label="Invalid" value={b.counts.invalid} cls="invalid" />
+                            <CountPill label="Catch-all" value={b.counts.catchAll} cls="catch-all" />
+                            <CountPill label="Unknown" value={b.counts.unknown} cls="unknown" />
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 };
@@ -2984,6 +3080,7 @@ function AppRoutes() {
       <Route path="/dashboard/tasks" element={<ProtectedRoute><TasksResults /></ProtectedRoute>} />
       <Route path="/dashboard/account" element={<ProtectedRoute><MyAccount /></ProtectedRoute>} />
       <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPanel /></ProtectedRoute>} />
+      <Route path="/admin/user/:uid" element={<ProtectedRoute adminOnly><AdminUserHistory /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" />} />
     </Routes>
   );

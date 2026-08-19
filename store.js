@@ -83,6 +83,32 @@ function firestoreStore() {
     const users = fs.collection('users');
     const resets = fs.collection('password_resets');
     const uid = (email) => String(email).trim().toLowerCase();
+    const countersRef = fs.collection('meta').doc('counters');
+
+    // Human-facing account ID shown in the Admin Panel: joining date + a
+    // globally unique sequence number, e.g. "BC-20260819-1042". The Firestore
+    // document id stays the lowercased email — this is display-only.
+    const makeDisplayId = (seq, when) => {
+        const d = when instanceof Date && !isNaN(when) ? when : new Date();
+        const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+        return `BC-${ymd}-${seq}`;
+    };
+
+    // Lazily assign a displayId to accounts created before this field existed.
+    async function backfillDisplayId(ref, createdAt) {
+        return fs.runTransaction(async (tx) => {
+            const snap = await tx.get(ref);
+            if (!snap.exists) return null;
+            if (snap.data().displayId) return snap.data().displayId;   // raced: already set
+            const csnap = await tx.get(countersRef);
+            const seq = ((csnap.exists && csnap.data().userSeq) || 1000) + 1;
+            const when = createdAt && createdAt.toDate ? createdAt.toDate() : new Date();
+            const displayId = makeDisplayId(seq, when);
+            tx.set(countersRef, { userSeq: seq }, { merge: true });
+            tx.update(ref, { displayId });
+            return displayId;
+        });
+    }
 
     const userView = (doc) => {
         const d = doc.data();
@@ -150,9 +176,14 @@ function firestoreStore() {
             const created = await fs.runTransaction(async (tx) => {
                 const snap = await tx.get(ref);
                 if (snap.exists) { const err = new Error('Email already exists'); err.code = 'EMAIL_EXISTS'; throw err; }
+                const csnap = await tx.get(countersRef);
+                const seq = ((csnap.exists && csnap.data().userSeq) || 1000) + 1;
+                tx.set(countersRef, { userSeq: seq }, { merge: true });
                 tx.set(ref, {
                     email, emailLower: uid(email), password: password ?? null,
                     credits, role, batchSeq: 0,
+                    displayId: makeDisplayId(seq),
+                    usedCredits: 0, lifetimeEmails: 0, lifetimeExecutions: 0,
                     createdAt: serverTimestamp(),
                 });
                 return true;
@@ -205,6 +236,22 @@ function firestoreStore() {
                 return { ok: true, credits };
             });
         },
+        // Lifetime "credits spent" counter — incremented by the amount actually
+        // billed for a verification (never by reservations or refunds), so the
+        // Admin Panel can show Used and Total (= balance + used) per account.
+        async addUsedCredits(id, amount) {
+            if (!(amount > 0)) return;
+            await users.doc(String(id)).set({ usedCredits: FieldValue.increment(amount) }, { merge: true });
+        },
+        // Webhook idempotency: returns true only the FIRST time an event id is
+        // claimed (create() fails if the document already exists), so a retried
+        // or replayed payment event can never grant credits twice.
+        async claimBillingEvent(eventId) {
+            try {
+                await fs.collection('billing_events').doc(String(eventId)).create({ at: serverTimestamp() });
+                return true;
+            } catch { return false; }
+        },
         async deleteUser(id) {
             const ref = users.doc(String(id));
             const snap = await ref.get();
@@ -230,23 +277,44 @@ function firestoreStore() {
             await ref.update({ role });
             return 1;
         },
+        // Normalize a user doc into the admin view, lazily backfilling the
+        // fields that predate them (displayId, lifetime counters).
+        async _adminView(doc) {
+            const d = doc.data();
+            let displayId = d.displayId;
+            if (!displayId) {
+                try { displayId = await backfillDisplayId(doc.ref, d.createdAt); } catch { displayId = doc.id; }
+            }
+            let lifetimeEmails = d.lifetimeEmails, lifetimeExecutions = d.lifetimeExecutions;
+            if (lifetimeEmails === undefined) {
+                // Seed lifetime counters from whatever batches still exist (best
+                // available data for accounts that predate the counters).
+                const bSnap = await doc.ref.collection('batches').select('total').get();
+                lifetimeEmails = 0; lifetimeExecutions = bSnap.size;
+                bSnap.forEach(b => { lifetimeEmails += (b.data().total || 0); });
+                try { await doc.ref.set({ lifetimeEmails, lifetimeExecutions }, { merge: true }); } catch {}
+            }
+            const used = d.usedCredits || 0;
+            return {
+                id: doc.id, displayId, email: d.email, credits: d.credits || 0, role: d.role || 'user',
+                created_at: toIso(d.createdAt),
+                used_credits: used, total_credits: (d.credits || 0) + used,
+                emails_verified: lifetimeEmails, executions: lifetimeExecutions,
+            };
+        },
         async listUsers({ hideSuper }) {
             const snap = await users.orderBy('createdAt', 'asc').get();
             const out = [];
             for (const doc of snap.docs) {
-                const d = doc.data();
-                if (hideSuper && d.role === 'superadmin') continue;
-                // Aggregate this user's batches (created_at within retention window
-                // isn't enforced here so admin totals reflect lifetime usage).
-                const bSnap = await doc.ref.collection('batches').select('total').get();
-                let emails_verified = 0;
-                bSnap.forEach(b => { emails_verified += (b.data().total || 0); });
-                out.push({
-                    id: doc.id, email: d.email, credits: d.credits, role: d.role || 'user',
-                    created_at: toIso(d.createdAt), emails_verified, executions: bSnap.size,
-                });
+                if (hideSuper && doc.data().role === 'superadmin') continue;
+                out.push(await this._adminView(doc));
             }
             return out;
+        },
+        // Single-user detail for the Admin Panel's per-user history page.
+        async adminUserDetail(id) {
+            const doc = await users.doc(String(id)).get();
+            return doc.exists ? this._adminView(doc) : null;
         },
 
         // Password resets (Firestore path)
@@ -286,6 +354,13 @@ function firestoreStore() {
                     results: stored,
                     createdAt: serverTimestamp(),
                 });
+                // Lifetime counters live on the USER doc so they survive the
+                // 30-day batch cleanup — this is what makes the Admin Panel's
+                // per-user history truly lifetime.
+                tx.set(uref, {
+                    lifetimeEmails: FieldValue.increment(s.total),
+                    lifetimeExecutions: FieldValue.increment(1),
+                }, { merge: true });
                 return seq;
             });
             return { id: bref.id, batchNumber, name: name || null, type, total: s.total, counts: countsFrom(s), createdAt: new Date().toISOString() };

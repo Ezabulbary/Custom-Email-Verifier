@@ -1,6 +1,40 @@
-# What's New — Catch-All Verifier + Buy Credits
+# What's New — Pricing-matched billing, lifetime admin history, security pass
 
-Latest update (v30):
+Latest update (v31):
+
+- **Buy Credits now mirrors the pricing page**: Starter $19 → 10,000 credits,
+  Pro $49 → 50,000 credits (Free = the 100-credit signup bonus). The landing
+  page's "Choose Starter/Pro" buttons go straight to `/dashboard/billing`.
+- **Automatic payments**: a REAL (live-mode) Stripe payment that completes as
+  `paid` adds credits automatically via the signature-verified webhook.
+  **Test-mode events never add credits**, replays/duplicates are rejected
+  (5-minute timestamp tolerance + per-event idempotency claim), and multiple
+  webhook signatures (secret rolls) are handled.
+- **Admin Panel — lifetime user history**: every account now has a permanent
+  display ID built from the joining date + a unique number (`BC-YYYYMMDD-NNNN`).
+  The users table shows ID, Joined, Email, Role, Add Credits, **Total Credits**
+  (balance + used), **Used Credits**, Actions — and clicking a row (anywhere
+  except the credit/actions controls) opens that user's history page
+  (`/admin/user/:id`) with a Back button, lifetime stat cards (balance, used,
+  total, lifetime verifications/executions) and their stored executions.
+  Lifetime counters live on the user document so they survive the 30-day
+  batch cleanup. Existing accounts are backfilled automatically.
+- **Security pass over all pages/endpoints** (fixes applied):
+  webhook replay/duplicate protection; `/billing/checkout` no longer trusts a
+  forged `Origin` header (FRONTEND_URL / CORS allow-list only); column-mapping
+  `labels` capped (256 columns × 120 chars); billing endpoints rate-limited.
+  Verified: every data endpoint requires auth, admin endpoints re-check the
+  live role from the DB, pre-2FA tokens are rejected outside `/auth/2fa/verify`,
+  job status/history are owner-scoped, superadmin accounts stay hidden from
+  plain admins (including the new history endpoint), task deletion remains
+  superadmin-only, CSV export neutralises formula injection, and no raw-HTML
+  sinks exist in the frontend.
+
+---
+
+# Catch-All Verifier + Buy Credits
+
+Earlier update (v30):
 
 - **Catch-All Verifier** (`/dashboard/catchall`): a dedicated tool for the hard
   case — catch-all domains, which accept every address. It deep-resolves each
