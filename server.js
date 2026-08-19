@@ -19,10 +19,11 @@ const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
+const https = require('https');
 const { fetchDomains } = require('./disposable');
-const { verifyEmail, quickVerify } = require('./verifier');
+const { verifyEmail, quickVerify, verifyCatchAll } = require('./verifier');
 const { isGoogleEnabled, verifyIdToken } = require('./firebaseAdmin');
-const { isEmailEnabled, sendResetEmail } = require('./mailer');
+const { isEmailEnabled, sendResetEmail, sendMail } = require('./mailer');
 const store = require('./store');
 const totp = require('./totp');
 const QRCode = require('qrcode');
@@ -57,6 +58,53 @@ const upload = multer({
 // when no allow-list is set (development convenience).
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
 app.use(cors(allowedOrigins.length ? { origin: allowedOrigins } : {}));
+
+// --- Billing: credit packs (server is the source of truth for prices) ---
+const CREDIT_PACKS = [
+    { id: 'starter', name: 'Starter',    credits: 1000,   price: 5,   currency: 'USD' },
+    { id: 'growth',  name: 'Growth',     credits: 10000,  price: 40,  currency: 'USD' },
+    { id: 'pro',     name: 'Pro',        credits: 50000,  price: 150, currency: 'USD' },
+    { id: 'scale',   name: 'Scale',      credits: 250000, price: 500, currency: 'USD' },
+];
+const packById = (id) => CREDIT_PACKS.find(p => p.id === id) || null;
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+
+// Stripe webhook — MUST read the RAW body to verify the signature, so it is
+// mounted with express.raw BEFORE the global express.json() below. On a
+// completed checkout it credits the buyer's account by the pack's credits.
+app.post('/billing/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    if (!STRIPE_WEBHOOK_SECRET) return res.status(400).send('Webhook not configured');
+    const sig = req.headers['stripe-signature'] || '';
+    // Signature header looks like: t=timestamp,v1=hexmac[,v1=...]
+    const parts = Object.fromEntries(sig.split(',').map(kv => kv.split('=')));
+    const ts = parts.t;
+    const payload = req.body; // Buffer (raw)
+    if (!ts || !parts.v1) return res.status(400).send('Bad signature');
+    const expected = crypto.createHmac('sha256', STRIPE_WEBHOOK_SECRET)
+        .update(`${ts}.${payload.toString('utf8')}`).digest('hex');
+    // Constant-time compare against the provided v1 signature.
+    const provided = parts.v1;
+    const ok = provided.length === expected.length &&
+        crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    if (!ok) return res.status(400).send('Signature verification failed');
+
+    let event;
+    try { event = JSON.parse(payload.toString('utf8')); } catch { return res.status(400).send('Bad JSON'); }
+
+    if (event.type === 'checkout.session.completed') {
+        const s = event.data.object || {};
+        const userId = (s.metadata && s.metadata.userId) || s.client_reference_id;
+        const credits = parseInt(s.metadata && s.metadata.credits, 10);
+        if (userId && credits > 0) {
+            try { await store.adjustCredits(userId, credits); }
+            catch (e) { console.error('[Billing] credit grant failed:', e.message); }
+            console.log(`[Billing] Granted ${credits} credits to user ${userId} (Stripe ${s.id}).`);
+        }
+    }
+    res.json({ received: true });
+});
+
 // Large bulk pastes (10k+ emails) need a bigger JSON body limit.
 app.use(express.json({ limit: '15mb' }));
 
@@ -563,7 +611,7 @@ setInterval(cleanupHistory, 6 * 60 * 60 * 1000);
 // those are never charged. Every other fine-grained status (safe, role,
 // catch-all, disposable, invalid, inbox_full, disabled, spamtrap) is a
 // definitive answer and is chargeable.
-const isChargeable = (status) => !!status && status !== 'unknown';
+const isChargeable = (status) => !!status && status !== 'unknown' && status !== 'not_catch_all';
 const CHARGEABLE = { has: isChargeable };   // keep the .has(...) call-sites working
 const chargeableCount = (results) => results.reduce((n, r) => n + (r && isChargeable(r.status) ? 1 : 0), 0);
 
@@ -889,6 +937,133 @@ app.post('/bounce/csv', authenticateToken, upload.single('file'), async (req, re
         console.error('Bounce check error:', err.message);
         res.status(500).json({ error: 'Bounce check failed' });
     }
+});
+
+// --- Catch-All Verifier (paid) ---
+// Deep-resolves catch-all addresses (the hard case). Addresses on non-catch-all
+// domains come back as 'not_catch_all' (not charged). Same credit rules as
+// standard verification: only conclusive results are billed.
+app.post('/catchall', authenticateToken, async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+    try {
+        const user = await store.getUserById(req.user.id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        const reservation = await store.reserveCredits(req.user.id, 1);
+        if (!reservation.ok) return res.status(402).json({ error: 'Insufficient credits' });
+        let result;
+        try { result = await verifyCatchAll(email); }
+        catch (e) { await store.adjustCredits(req.user.id, 1); throw e; }
+        const charge = isChargeable(result.status) ? 1 : 0;
+        if (!charge) await store.adjustCredits(req.user.id, 1);
+        const batch = await saveBatch(req.user.id, 'catchall', [result], (req.body.name || '').toString().slice(0, 120) || null);
+        res.json({ ...result, charged: charge, batchId: batch && batch.id, batchNumber: batch && batch.batchNumber });
+    } catch (err) {
+        console.error('Catch-all verify error:', err.message);
+        res.status(500).json({ error: 'Catch-all verification failed' });
+    }
+});
+
+app.post('/catchall/bulk', authenticateToken, async (req, res) => {
+    const emails = Array.isArray(req.body.emails)
+        ? req.body.emails.map(e => String(e).trim()).filter(Boolean) : null;
+    const name = (req.body.name || '').toString().slice(0, 120) || null;
+    if (!emails || emails.length === 0) return res.status(400).json({ error: 'Array of emails is required' });
+    try { await startVerificationJob(req, res, { type: 'catchall', emails, name, verifyFn: verifyCatchAll }); }
+    catch (err) { console.error('Catch-all bulk error:', err.message); res.status(500).json({ error: 'Catch-all verification failed' }); }
+});
+
+app.post('/catchall/csv', authenticateToken, upload.single('file'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'A file is required' });
+    const name = (req.body.name || '').toString().slice(0, 120) || null;
+    let parsed = { emails: [], sources: [] };
+    try { parsed = parseCsvRows(fs.readFileSync(req.file.path), csvOptsFromBody(req.body)); }
+    catch (e) { console.error('Catch-all parse error:', e.message); }
+    finally { fs.unlink(req.file.path, () => {}); }
+    if (parsed.emails.length === 0) return res.status(400).json({ error: 'No email addresses found in the file. Make sure it has an email column, or one email per line.' });
+    try { await startVerificationJob(req, res, { type: 'catchall', emails: parsed.emails, name, sources: parsed.sources, verifyFn: verifyCatchAll }); }
+    catch (err) { console.error('Catch-all CSV error:', err.message); res.status(500).json({ error: 'Catch-all verification failed' }); }
+});
+
+// --- Billing: config, Stripe checkout, and manual (Wise / bank transfer) ---
+app.get('/billing/config', authenticateToken, (req, res) => {
+    const wise = (process.env.WISE_PAYMENT_URL || process.env.WISE_EMAIL)
+        ? { url: process.env.WISE_PAYMENT_URL || null, email: process.env.WISE_EMAIL || null } : null;
+    const bankSet = ['BANK_NAME', 'BANK_HOLDER', 'BANK_ACCOUNT', 'BANK_IBAN', 'BANK_SWIFT'].some(k => process.env[k]);
+    const bank = bankSet ? {
+        holder: process.env.BANK_HOLDER || null, bankName: process.env.BANK_NAME || null,
+        account: process.env.BANK_ACCOUNT || null, iban: process.env.BANK_IBAN || null,
+        swift: process.env.BANK_SWIFT || null, notes: process.env.BANK_NOTES || null,
+    } : null;
+    res.json({ packs: CREDIT_PACKS, methods: { stripe: !!STRIPE_SECRET_KEY, wise: !!wise, bank: !!bank }, wise, bank });
+});
+
+// Create a Stripe Checkout Session via the REST API (no SDK dependency).
+function stripeCreateCheckout(form) {
+    return new Promise((resolve, reject) => {
+        const body = new URLSearchParams(form).toString();
+        const r = https.request({
+            hostname: 'api.stripe.com', path: '/v1/checkout/sessions', method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${STRIPE_SECRET_KEY}`,
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Content-Length': Buffer.byteLength(body),
+            },
+        }, (resp) => {
+            let d = ''; resp.on('data', c => d += c);
+            resp.on('end', () => {
+                try { const j = JSON.parse(d); resp.statusCode >= 400 ? reject(new Error((j.error && j.error.message) || 'Stripe error')) : resolve(j); }
+                catch (e) { reject(e); }
+            });
+        });
+        r.on('error', reject); r.write(body); r.end();
+    });
+}
+
+app.post('/billing/checkout', authenticateToken, async (req, res) => {
+    if (!STRIPE_SECRET_KEY) return res.status(400).json({ error: 'Card payments are not configured yet. Please use Wise or bank transfer.' });
+    const pack = packById(req.body.packId);
+    if (!pack) return res.status(400).json({ error: 'Unknown credit pack' });
+    const origin = process.env.FRONTEND_URL || req.headers.origin || '';
+    try {
+        const session = await stripeCreateCheckout({
+            mode: 'payment',
+            'success_url': `${origin}/dashboard/billing?paid=1`,
+            'cancel_url': `${origin}/dashboard/billing?canceled=1`,
+            'client_reference_id': String(req.user.id),
+            'metadata[userId]': String(req.user.id),
+            'metadata[credits]': String(pack.credits),
+            'line_items[0][quantity]': '1',
+            'line_items[0][price_data][currency]': pack.currency.toLowerCase(),
+            'line_items[0][price_data][unit_amount]': String(pack.price * 100),
+            'line_items[0][price_data][product_data][name]': `${pack.credits.toLocaleString()} verification credits (${pack.name})`,
+        });
+        res.json({ url: session.url });
+    } catch (err) {
+        console.error('Stripe checkout error:', err.message);
+        res.status(502).json({ error: 'Could not start checkout. Please try again.' });
+    }
+});
+
+// Wise / international bank transfer: record the intent, notify ops, and hand
+// back a reference the buyer puts in the payment note. An admin adds the credits
+// once the transfer clears (via the Admin Panel).
+app.post('/billing/manual', authenticateToken, async (req, res) => {
+    const pack = packById(req.body.packId);
+    const method = ['wise', 'bank'].includes(req.body.method) ? req.body.method : null;
+    if (!pack || !method) return res.status(400).json({ error: 'Invalid request' });
+    const user = await store.getUserById(req.user.id);
+    const reference = 'BC-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+    const summary = `Manual payment intent
+Ref: ${reference}
+User: ${user && user.email} (id ${req.user.id})
+Method: ${method}
+Pack: ${pack.name} — ${pack.credits.toLocaleString()} credits — ${pack.price} ${pack.currency}`;
+    const adminTo = process.env.BILLING_NOTIFY_EMAIL || process.env.ADMIN_EMAIL || '';
+    try { if (adminTo) await sendMail({ to: adminTo, subject: `[BounceCure] Manual payment ${reference}`, text: summary }); }
+    catch (e) { console.error('Manual payment notice failed:', e.message); }
+    console.log('[Billing] ' + summary.replace(/\n/g, ' | '));
+    res.json({ reference, message: `Use reference ${reference} in your payment note. Your credits are added once we confirm the transfer.` });
 });
 
 // Poll the progress of a background bulk/CSV job.

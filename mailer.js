@@ -80,4 +80,12 @@ async function sendResetEmail(to, link) {
     return true;
 }
 
-module.exports = { isEmailEnabled, sendResetEmail };
+// Generic send used for admin/ops notices (e.g. a manual payment notification).
+// Returns true if sent, false if email isn't configured.
+async function sendMail({ to, subject, text, html }) {
+    if (!enabled || !to) return false;
+    await transporter.sendMail({ from: FROM, to, subject, text, html });
+    return true;
+}
+
+module.exports = { isEmailEnabled, sendResetEmail, sendMail };

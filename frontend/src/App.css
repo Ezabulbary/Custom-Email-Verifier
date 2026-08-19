@@ -384,6 +384,7 @@
 .badge.disposable { background: #fee2e2; color: #dc2626; }
 .badge.disabled { background: #fde2e2; color: #b91c1c; }
 .badge.spamtrap { background: #fecaca; color: #991b1b; }
+.badge.not_catch_all { background: #f1f5f9; color: #64748b; }
 .badge.unknown { background: #f1f5f9; color: #64748b; }
 /* Role badges */
 .badge.role-superadmin { background: #ede9fe; color: #6d28d9; }
@@ -910,6 +911,8 @@
 .badge.type-single { background: #e0e7ff; color: #4338ca; }
 .badge.type-bulk { background: #dbeafe; color: #1d4ed8; }
 .badge.type-csv { background: #d1fae5; color: #047857; }
+.badge.type-catchall { background: #ede9fe; color: #6d28d9; }
+.badge.type-bounce { background: #fef3c7; color: #b45309; }
 
 /* --- My Account --- */
 .account-avatar { width: 56px; height: 56px; border-radius: 50%; background: var(--accent-color); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; font-weight: 700; flex-shrink: 0; }
@@ -1068,6 +1071,56 @@
   .vguide-signals { grid-template-columns: 1fr; }
   .vguide-why { grid-template-columns: 1fr; }
   .vguide-hero { flex-direction: column; }
+}
+
+/* --- Catch-All Verifier summary tiles --- */
+.ca-summary { padding: 1.25rem; margin-top: 1.5rem; }
+.ca-tiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.75rem; }
+.ca-tile { padding: 1rem 0.5rem; text-align: center; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-surface); }
+.ca-num { font-size: 1.5rem; font-weight: 800; color: var(--text-primary); }
+.ca-lbl { font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.15rem; }
+@media (max-width: 640px) { .ca-tiles { grid-template-columns: repeat(3, 1fr); } }
+
+/* --- Buy Credits / Billing --- */
+.bill-h { font-size: 1.05rem; font-weight: 700; margin: 1.75rem 0 0.9rem; color: var(--text-primary); }
+.bill-h:first-of-type { margin-top: 0.5rem; }
+.bill-packs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.85rem; }
+.bill-pack { text-align: left; padding: 1.1rem 1.15rem; border-radius: 14px; border: 1.5px solid var(--border-color); background: var(--bg-surface); transition: all 0.15s ease; }
+.bill-pack:hover { border-color: #c7d2fe; }
+.bill-pack.active { border-color: var(--accent-color); background: #f5f3ff; box-shadow: 0 0 0 3px rgba(124,58,237,0.10); }
+.bill-pack-name { font-weight: 700; color: var(--text-primary); }
+.bill-pack-credits { font-size: 1.15rem; font-weight: 800; color: var(--text-primary); margin-top: 0.35rem; }
+.bill-pack-credits span { font-size: 0.75rem; font-weight: 500; color: var(--text-secondary); }
+.bill-pack-price { font-size: 1.5rem; font-weight: 800; color: var(--accent-color); margin-top: 0.4rem; }
+.bill-pack-unit { font-size: 0.75rem; color: var(--text-secondary); }
+
+.bill-methods { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.85rem; }
+.bill-method { display: flex; align-items: center; gap: 0.7rem; text-align: left; padding: 0.9rem 1rem; border-radius: 12px; border: 1.5px solid var(--border-color); background: var(--bg-surface); color: var(--text-secondary); transition: all 0.15s ease; }
+.bill-method span { display: block; font-size: 0.78rem; color: var(--text-secondary); }
+.bill-method strong { color: var(--text-primary); font-size: 0.95rem; }
+.bill-method:hover { border-color: #c7d2fe; }
+.bill-method.active { border-color: var(--accent-color); background: #f5f3ff; box-shadow: 0 0 0 3px rgba(124,58,237,0.10); }
+.bill-method.active strong, .bill-method.active svg { color: var(--accent-color); }
+
+.bill-detail { padding: 1.25rem 1.5rem; margin-top: 1rem; }
+.bill-detail p { margin: 0.3rem 0; color: var(--text-secondary); }
+.bill-detail a { color: var(--accent-color); }
+.bill-bank { border-collapse: collapse; width: 100%; }
+.bill-bank td { padding: 0.45rem 0.5rem; border-bottom: 1px solid var(--border-color); font-size: 0.9rem; }
+.bill-bank td:first-child { color: var(--text-secondary); width: 40%; }
+.bill-bank td:last-child { color: var(--text-primary); font-weight: 600; }
+
+.bill-cta { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.75rem; padding: 1.25rem 1.5rem; border: 1px solid var(--border-color); border-radius: 14px; background: var(--bg-surface); flex-wrap: wrap; }
+.bill-cta-sum { font-size: 1.2rem; font-weight: 800; color: var(--text-primary); }
+.bill-cta .btn-primary { min-width: 220px; justify-content: center; }
+
+.bill-notice { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.9rem 1.1rem; border-radius: 12px; margin-bottom: 1.25rem; }
+.bill-notice.ok { background: #d1fae5; color: #065f46; }
+.bill-notice.err { background: #fee2e2; color: #991b1b; }
+
+@media (max-width: 780px) {
+  .bill-packs { grid-template-columns: repeat(2, 1fr); }
+  .bill-methods { grid-template-columns: 1fr; }
 }
 
 /* --- Profile: password fields with lock + eye --- */

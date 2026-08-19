@@ -425,4 +425,34 @@ async function quickVerify(email) {
     return result;
 }
 
-module.exports = { verifyEmail, quickVerify, statusBucket, isRoleAddress, classifySmtpMessage, STATUSES };
+// --- Catch-all-only verification --------------------------------------------
+// A dedicated pass for the "Catch-All Verifier": it runs the full check, but is
+// only meaningful for CATCH-ALL domains — the hard case standard verifiers flag
+// as "risky". For a catch-all domain we try to RESOLVE the individual mailbox
+// using every deep signal verifyEmail already gathers (Microsoft 365 API, and
+// whether the server's reply for the real address differs from a random probe),
+// so a catch-all can come back as deliverable (safe/role) instead of a shrug.
+//
+// Addresses on NON-catch-all domains are returned with status 'not_catch_all'
+// so the page can skip them ("use standard verification for these").
+async function verifyCatchAll(email) {
+    const r = await verifyEmail(email);
+
+    // Inconclusive (SMTP unreachable, greylisting, blocked port): we couldn't
+    // even determine catch-all status, so keep 'unknown' rather than mislabel it.
+    if (r.status === 'unknown') return r;
+
+    // Conclusive verdicts that don't depend on catch-all — pass through as-is.
+    if (['invalid', 'disposable', 'spamtrap', 'inbox_full', 'disabled'].includes(r.status)) return r;
+
+    // In scope: a catch-all domain. verifyEmail sets isCatchAll=true when every
+    // random probe was accepted — even if it then resolved the real mailbox to
+    // safe/role via a deeper signal (Microsoft 365, reply-differencing).
+    if (r.isCatchAll || r.status === 'catch-all') return r;
+
+    // Otherwise it's a normal (non-catch-all) mailbox that resolved cleanly —
+    // out of scope for this tool.
+    return { ...r, status: 'not_catch_all', reason: 'Not a catch-all domain — use standard verification' };
+}
+
+module.exports = { verifyEmail, quickVerify, verifyCatchAll, statusBucket, isRoleAddress, classifySmtpMessage, STATUSES };

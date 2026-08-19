@@ -222,6 +222,7 @@ const STATUS_META = {
   disabled:   { label: 'Disabled',   icon: 'bad',  color: '#dc2626' },
   spamtrap:   { label: 'Spamtrap',   icon: 'bad',  color: '#b91c1c' },
   invalid:    { label: 'Invalid',    icon: 'bad',  color: '#dc2626' },
+  not_catch_all: { label: 'Not catch-all', icon: 'unk', color: '#64748b' },
   unknown:    { label: 'Unknown',    icon: 'unk',  color: '#64748b' },
 };
 const statusMeta = (status) => STATUS_META[status] || STATUS_META.unknown;
@@ -318,7 +319,7 @@ const ResultsTable = ({ results, title = 'Results' }) => {
 
 // --- Execution history (last 30 days, per verification type) ---
 
-const TYPE_LABELS = { single: 'Single', bulk: 'Bulk', csv: 'CSV' };
+const TYPE_LABELS = { single: 'Single', bulk: 'Bulk', csv: 'CSV', catchall: 'Catch-all', bounce: 'Bounce' };
 
 const formatDate = (iso) => {
   if (!iso) return '';
@@ -1240,7 +1241,9 @@ const Register = () => {
 const PAGE_TITLES = {
   '/dashboard': 'Overview',
   '/dashboard/verify': 'Email Verification',
+  '/dashboard/catchall': 'Catch-All Verifier',
   '/dashboard/bounce': 'Bounce Rate',
+  '/dashboard/billing': 'Buy Credits',
   '/dashboard/tasks': 'Tasks & Results',
   '/dashboard/account': 'My Account',
   '/admin': 'Admin Panel',
@@ -1260,7 +1263,9 @@ const DashboardLayout = ({ children }) => {
         <div className="sidebar-nav">
           <Link to="/dashboard" className={`nav-item ${location.pathname==='/dashboard'?'active':''}`}><LayoutDashboard size={18}/> Overview</Link>
           <Link to="/dashboard/verify" className={`nav-item ${location.pathname==='/dashboard/verify'?'active':''}`}><CheckCircle size={18}/> Email Verification</Link>
+          <Link to="/dashboard/catchall" className={`nav-item ${location.pathname==='/dashboard/catchall'?'active':''}`}><MailCheck size={18}/> Catch-All Verifier</Link>
           <Link to="/dashboard/bounce" className={`nav-item ${location.pathname==='/dashboard/bounce'?'active':''}`}><AlertCircle size={18}/> Bounce Rate</Link>
+          <Link to="/dashboard/billing" className={`nav-item ${location.pathname==='/dashboard/billing'?'active':''}`}><Plus size={18}/> Buy Credits</Link>
           <Link to="/dashboard/tasks" className={`nav-item ${location.pathname==='/dashboard/tasks'?'active':''}`}><History size={18}/> Tasks &amp; Results</Link>
           <Link to="/dashboard/account" className={`nav-item ${location.pathname==='/dashboard/account'?'active':''}`}><User size={18}/> My Account</Link>
           {(user?.role === 'admin' || user?.role === 'superadmin') && (
@@ -1811,6 +1816,290 @@ const BounceChecker = () => {
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+// --- Catch-All Verifier -----------------------------------------------------
+// A dedicated tool for the hard case: catch-all domains. It deep-resolves each
+// address and reports whether a catch-all is actually deliverable, still risky,
+// undeliverable, or simply not a catch-all (verify those normally).
+const CATCHALL_BUCKET = (status) => {
+  if (status === 'safe' || status === 'role') return 'deliverable';
+  if (status === 'catch-all') return 'catchall';
+  if (status === 'invalid' || status === 'disabled') return 'undeliverable';
+  if (status === 'not_catch_all') return 'notCatchAll';
+  return 'other';
+};
+
+const CatchAllVerifier = () => {
+  const { refreshUser } = useAuth();
+  const [results, setResults] = useState([]);
+  const [progress, setProgress] = useState(null);
+
+  const [email, setEmail] = useState('');
+  const [singleLoading, setSingleLoading] = useState(false);
+
+  const [bulkText, setBulkText] = useState('');
+  const [bulkLoading, setBulkLoading] = useState(false);
+
+  const [file, setFile] = useState(null);
+  const [showMap, setShowMap] = useState(false);
+  const [csvLoading, setCsvLoading] = useState(false);
+  const fileInputRef = useRef(null);
+  const pickFile = (f) => { if (f) { setFile(f); setShowMap(true); } };
+
+  const verifySingle = async (e) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setSingleLoading(true); setProgress(null);
+    try {
+      const data = await apiFetch('/catchall', { method: 'POST', body: JSON.stringify({ email: email.trim() }) });
+      if (data.error) throw new Error(data.error);
+      setResults([data]);
+      await refreshUser();
+    } catch (err) { alert(friendlyError(err)); }
+    setSingleLoading(false);
+  };
+
+  const runJob = async (submit, total, setLoading) => {
+    setLoading(true); setResults([]); setProgress({ processed: 0, total });
+    try {
+      const job = await submit();
+      if (job.error) throw new Error(job.error);
+      setProgress({ processed: 0, total: job.total });
+      const done = await pollJob(job.jobId, (p, t) => setProgress({ processed: p, total: t }));
+      let out = done.results;
+      if (!out && done.batchId) { const b = await apiFetch(`/history/${done.batchId}`); out = (b && b.results) || []; }
+      setResults(out || []);
+      await refreshUser();
+    } catch (err) { alert(friendlyError(err)); }
+    setProgress(null); setLoading(false);
+  };
+
+  const verifyBulk = (e) => {
+    e.preventDefault();
+    const arr = bulkText.split('\n').map(s => s.trim()).filter(Boolean);
+    if (!arr.length) return;
+    runJob(() => apiFetch('/catchall/bulk', { method: 'POST', body: JSON.stringify({ emails: arr }) }), arr.length, setBulkLoading);
+  };
+
+  const verifyCsv = (opts) => {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    if (opts) {
+      fd.append('emailCol', String(opts.emailCol));
+      fd.append('hasHeader', opts.hasHeader);
+      fd.append('dedupe', opts.dedupe ? '1' : '0');
+      fd.append('labels', JSON.stringify(opts.labels || []));
+    }
+    runJob(() => apiFetch('/catchall/csv', { method: 'POST', body: fd }), 0, setCsvLoading)
+      .then(() => { setFile(null); setShowMap(false); });
+  };
+
+  const summary = React.useMemo(() => {
+    if (!results.length) return null;
+    const s = { total: results.length, deliverable: 0, catchall: 0, undeliverable: 0, notCatchAll: 0, other: 0 };
+    for (const r of results) s[CATCHALL_BUCKET(r.status)]++;
+    return s;
+  }, [results]);
+
+  return (
+    <div>
+      <p className="muted" style={{ marginTop: 0, marginBottom: '1.5rem' }}>
+        Catch-all domains accept every address, so standard SMTP can't tell a real mailbox from a fake one.
+        This tool deep-resolves them — using Microsoft&nbsp;365 signals and SMTP reply-differencing — so a catch-all can come back
+        <strong> deliverable</strong> instead of just “risky”. Addresses that aren't catch-all are flagged so you verify them normally.
+      </p>
+
+      <div className="card verify-single-card">
+        <form onSubmit={verifySingle}>
+          <label>Verify a single catch-all address</label>
+          <div className="verify-single-row">
+            <input type="email" className="input-field" placeholder="name@catch-all-domain.com" value={email} onChange={e => setEmail(e.target.value)} />
+            <button type="submit" className="btn-primary" disabled={singleLoading}>
+              {singleLoading ? <Loader2 className="loader" size={18} /> : <Search size={18} />} Verify
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="verify-grid">
+        <div className="card">
+          <div className="verify-opt-title"><List size={17} /> Paste a list</div>
+          <form onSubmit={verifyBulk} className="form-group">
+            <label>Catch-all addresses (one per line)</label>
+            <textarea className="input-field" style={{ minHeight: '170px' }} value={bulkText} onChange={e => setBulkText(e.target.value)} placeholder={"one@domain.com\ntwo@domain.com"} />
+            <button type="submit" className="btn-primary" disabled={bulkLoading} style={{ marginTop: '1rem' }}>
+              {bulkLoading ? <Loader2 className="loader" size={18} /> : <List size={18} />} Start Verification
+            </button>
+          </form>
+        </div>
+
+        <div className="card">
+          <div className="verify-opt-title"><Upload size={17} /> Upload a file</div>
+          <div className="upload-area" onClick={() => fileInputRef.current.click()}
+            onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }}
+            onDragLeave={(e) => e.currentTarget.classList.remove('drag-over')}
+            onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove('drag-over'); if (e.dataTransfer.files && e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]); }}>
+            <input type="file" accept=".csv,.txt" ref={fileInputRef} onChange={e => { pickFile(e.target.files[0]); e.target.value = ''; }} style={{ display: 'none' }} />
+            <Upload size={40} color="var(--accent-color)" />
+            <p style={{ fontWeight: 500, margin: '0.5rem 0 0.25rem' }}>{file ? file.name : 'Drag & drop, or click to browse'}</p>
+            <span className="muted-inline">CSV (any columns) or TXT (one email per line)</span>
+          </div>
+          <button onClick={() => file && setShowMap(true)} className="btn-primary" disabled={!file || csvLoading} style={{ marginTop: '1rem' }}>
+            {csvLoading ? <Loader2 className="loader" size={18} /> : <Upload size={18} />} Start Verification
+          </button>
+        </div>
+      </div>
+
+      {showMap && file && <ColumnMapModal file={file} ctaLabel="Start Verification" onCancel={() => setShowMap(false)} onStart={(opts) => { setShowMap(false); verifyCsv(opts); }} />}
+
+      {progress && <JobProgress processed={progress.processed} total={progress.total} />}
+
+      {summary && (
+        <div className="card ca-summary">
+          <div className="ca-tiles">
+            <div className="ca-tile"><div className="ca-num" style={{ color: '#059669' }}>{summary.deliverable.toLocaleString()}</div><div className="ca-lbl">Deliverable</div></div>
+            <div className="ca-tile"><div className="ca-num" style={{ color: '#d97706' }}>{summary.catchall.toLocaleString()}</div><div className="ca-lbl">Still catch-all</div></div>
+            <div className="ca-tile"><div className="ca-num" style={{ color: '#dc2626' }}>{summary.undeliverable.toLocaleString()}</div><div className="ca-lbl">Undeliverable</div></div>
+            <div className="ca-tile"><div className="ca-num" style={{ color: '#64748b' }}>{summary.notCatchAll.toLocaleString()}</div><div className="ca-lbl">Not catch-all</div></div>
+            <div className="ca-tile"><div className="ca-num">{summary.total.toLocaleString()}</div><div className="ca-lbl">Total</div></div>
+          </div>
+        </div>
+      )}
+
+      {results.length > 0 && <ResultsTable results={results} title="Catch-all results" />}
+    </div>
+  );
+};
+
+// --- Buy Credits / Billing --------------------------------------------------
+const BillingPage = () => {
+  const { user, refreshUser } = useAuth();
+  const [cfg, setCfg] = useState(null);
+  const [packId, setPackId] = useState('growth');
+  const [method, setMethod] = useState('stripe');
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState(() => {
+    const p = new URLSearchParams(window.location.search);
+    if (p.get('paid')) return { ok: true, text: 'Payment received — your credits will appear shortly.' };
+    if (p.get('canceled')) return { ok: false, text: 'Checkout was canceled.' };
+    return null;
+  });
+
+  useEffect(() => { apiFetch('/billing/config').then(setCfg).catch(() => setCfg({ packs: [], methods: {} })); }, []);
+  useEffect(() => {
+    // If we came back from a successful checkout, refresh the credit balance.
+    if (new URLSearchParams(window.location.search).get('paid')) refreshUser();
+  }, [refreshUser]);
+
+  if (!cfg) return <p className="muted"><Loader2 className="loader" size={16} /> Loading…</p>;
+  const pack = cfg.packs.find(p => p.id === packId) || cfg.packs[0];
+
+  const pay = async () => {
+    if (!pack) return;
+    setLoading(true); setNotice(null);
+    try {
+      if (method === 'stripe') {
+        const r = await apiFetch('/billing/checkout', { method: 'POST', body: JSON.stringify({ packId: pack.id }) });
+        if (r.error) throw new Error(r.error);
+        if (r.url) window.location.href = r.url;
+      } else {
+        const r = await apiFetch('/billing/manual', { method: 'POST', body: JSON.stringify({ packId: pack.id, method }) });
+        if (r.error) throw new Error(r.error);
+        setNotice({ ok: true, text: r.message, reference: r.reference });
+      }
+    } catch (err) { setNotice({ ok: false, text: friendlyError(err) }); }
+    setLoading(false);
+  };
+
+  const METHODS = [
+    { id: 'stripe', label: 'Card (Stripe)', icon: Zap, hint: 'Instant — Visa, Mastercard, Amex' },
+    { id: 'wise', label: 'Wise', icon: RefreshCw, hint: 'Low-fee international transfer' },
+    { id: 'bank', label: 'Bank transfer', icon: Scale, hint: 'International / SWIFT' },
+  ];
+
+  return (
+    <div>
+      <p className="muted" style={{ marginTop: 0, marginBottom: '1.5rem' }}>
+        Buy verification credits. Current balance: <strong>{(user?.credits ?? 0).toLocaleString()}</strong> credits.
+        Pay by card for instant top-up, or by Wise / international bank transfer.
+      </p>
+
+      {notice && (
+        <div className={`bill-notice ${notice.ok ? 'ok' : 'err'}`}>
+          {notice.ok ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
+          <div>{notice.text}{notice.reference && <> Reference: <strong>{notice.reference}</strong></>}</div>
+        </div>
+      )}
+
+      <h3 className="bill-h">1. Choose a credit pack</h3>
+      <div className="bill-packs">
+        {cfg.packs.map(p => (
+          <button key={p.id} className={`bill-pack ${packId === p.id ? 'active' : ''}`} onClick={() => setPackId(p.id)}>
+            <div className="bill-pack-name">{p.name}</div>
+            <div className="bill-pack-credits">{p.credits.toLocaleString()} <span>credits</span></div>
+            <div className="bill-pack-price">${p.price}</div>
+            <div className="bill-pack-unit">${(p.price / p.credits * 1000).toFixed(2)} / 1k</div>
+          </button>
+        ))}
+      </div>
+
+      <h3 className="bill-h">2. Choose a payment method</h3>
+      <div className="bill-methods">
+        {METHODS.map(m => (
+          <button key={m.id} className={`bill-method ${method === m.id ? 'active' : ''}`} onClick={() => setMethod(m.id)}>
+            <m.icon size={18} />
+            <div><strong>{m.label}</strong><span>{m.hint}</span></div>
+          </button>
+        ))}
+      </div>
+
+      {method === 'wise' && (
+        <div className="bill-detail card">
+          {cfg.wise ? (
+            <>
+              <p>Send your payment via Wise to:</p>
+              {cfg.wise.email && <p><strong>Wise email:</strong> {cfg.wise.email}</p>}
+              {cfg.wise.url && <p><a href={cfg.wise.url} target="_blank" rel="noreferrer">Open Wise payment link →</a></p>}
+              <p className="muted-inline">Click “I've sent the payment” to get a reference. Credits are added once the transfer clears.</p>
+            </>
+          ) : <p className="muted">Wise details will be shared with your reference after you click below.</p>}
+        </div>
+      )}
+      {method === 'bank' && (
+        <div className="bill-detail card">
+          {cfg.bank ? (
+            <table className="bill-bank">
+              <tbody>
+                {cfg.bank.holder && <tr><td>Account holder</td><td>{cfg.bank.holder}</td></tr>}
+                {cfg.bank.bankName && <tr><td>Bank</td><td>{cfg.bank.bankName}</td></tr>}
+                {cfg.bank.account && <tr><td>Account no.</td><td>{cfg.bank.account}</td></tr>}
+                {cfg.bank.iban && <tr><td>IBAN</td><td>{cfg.bank.iban}</td></tr>}
+                {cfg.bank.swift && <tr><td>SWIFT/BIC</td><td>{cfg.bank.swift}</td></tr>}
+                {cfg.bank.notes && <tr><td>Notes</td><td>{cfg.bank.notes}</td></tr>}
+              </tbody>
+            </table>
+          ) : <p className="muted">International bank details will be shared with your reference after you click below.</p>}
+        </div>
+      )}
+
+      <div className="bill-cta">
+        <div>
+          <div className="bill-cta-sum">{pack ? `${pack.credits.toLocaleString()} credits` : '—'}</div>
+          <div className="muted-inline">{pack ? `${pack.name} pack` : ''}</div>
+        </div>
+        <button className="btn-primary" onClick={pay} disabled={loading || !pack}>
+          {loading ? <Loader2 className="loader" size={18} /> : <Lock size={16} />}
+          {method === 'stripe' ? `Pay $${pack ? pack.price : ''} by card` : "I've sent the payment"}
+        </button>
+      </div>
+
+      <p className="muted-inline" style={{ display: 'block', marginTop: '1rem' }}>
+        Payments are processed securely. For manual methods (Wise / bank), your credits are added after we confirm the transfer.
+      </p>
     </div>
   );
 };
@@ -2685,7 +2974,9 @@ function AppRoutes() {
       <Route path="/gdpr" element={<GDPR />} />
       <Route path="/dashboard" element={<ProtectedRoute><DashboardHome /></ProtectedRoute>} />
       <Route path="/dashboard/verify" element={<ProtectedRoute><EmailVerification /></ProtectedRoute>} />
+      <Route path="/dashboard/catchall" element={<ProtectedRoute><CatchAllVerifier /></ProtectedRoute>} />
       <Route path="/dashboard/bounce" element={<ProtectedRoute><BounceChecker /></ProtectedRoute>} />
+      <Route path="/dashboard/billing" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
       {/* Old separate routes now redirect to the unified page */}
       <Route path="/dashboard/single" element={<Navigate to="/dashboard/verify" replace />} />
       <Route path="/dashboard/bulk" element={<Navigate to="/dashboard/verify" replace />} />

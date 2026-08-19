@@ -1,6 +1,29 @@
-# What's New — Fine-grained statuses, column-mapping, real Bounce Rate
+# What's New — Catch-All Verifier + Buy Credits
 
-Latest update (v26):
+Latest update (v30):
+
+- **Catch-All Verifier** (`/dashboard/catchall`): a dedicated tool for the hard
+  case — catch-all domains, which accept every address. It deep-resolves each
+  address using Microsoft 365 signals and SMTP reply-differencing, so a catch-all
+  can come back **deliverable** (safe/role) instead of just "risky". Addresses
+  that aren't catch-all are marked `not_catch_all` (and never charged) so you
+  verify them with the standard tool. Single / paste / file (with column mapping)
+  inputs, plus a Deliverable / Still-catch-all / Undeliverable / Not-catch-all
+  summary. Backend: `verifyCatchAll()` + `/catchall`, `/catchall/bulk`,
+  `/catchall/csv`.
+- **Buy Credits page** (`/dashboard/billing`): four credit packs and three
+  payment methods — **Stripe** (card, instant, via Stripe Checkout + a
+  signature-verified webhook that grants credits), **Wise**, and **international
+  bank transfer**. Manual methods return a payment reference and notify ops; an
+  admin grants the credits once the transfer clears. All billing config is env-
+  driven (see `.env.example`): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+  `WISE_*`, `BANK_*`, `BILLING_NOTIFY_EMAIL`.
+
+---
+
+# Fine-grained statuses, column-mapping, real Bounce Rate
+
+Earlier update (v26):
 
 - **Fine-grained verification statuses** (idea inspired by Reoon, built for this
   app): every result now returns one of `safe`, `role`, `catch-all`,
