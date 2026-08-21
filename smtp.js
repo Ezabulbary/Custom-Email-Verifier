@@ -8,8 +8,15 @@ const TIMEOUT_MS = Number(process.env.SMTP_TIMEOUT_MS) || 12000;
 // and returns "unknown". Set VERIFY_HELO_DOMAIN to a REAL domain you control
 // (ideally the reverse-DNS/PTR of this server's IP, with an SPF record), and
 // VERIFY_MAIL_FROM to a real-looking sender on it. See README.md §4.
-const HELO_DOMAIN = (process.env.VERIFY_HELO_DOMAIN || 'verify.example.com').trim();
-const MAIL_FROM = (process.env.VERIFY_MAIL_FROM || `verify@${HELO_DOMAIN}`).trim();
+// If you have no domain yet, you can HELO with your server's public IP — but
+// SMTP (RFC 5321) requires an IP literal to be bracketed, e.g. `[187.127.113.86]`.
+// Auto-bracket a bare IPv4 so `VERIFY_HELO_DOMAIN=187.127.113.86` still works.
+// (A real domain with matching PTR + SPF is still far better for accuracy.)
+const rawHelo = (process.env.VERIFY_HELO_DOMAIN || 'verify.example.com').trim();
+const HELO_DOMAIN = /^\d{1,3}(\.\d{1,3}){3}$/.test(rawHelo) ? `[${rawHelo}]` : rawHelo;
+// MAIL FROM can't use a bracketed IP as its domain; fall back to a plain sender
+// on the raw value (or the configured VERIFY_MAIL_FROM).
+const MAIL_FROM = (process.env.VERIFY_MAIL_FROM || `verify@${rawHelo}`).trim();
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
