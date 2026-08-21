@@ -63,7 +63,36 @@ async function resolvePublicMxIp(host) {
 
 // How many random addresses to probe when detecting a catch-all domain. More
 // probes = higher confidence that the domain really accepts everything.
-const CATCH_ALL_PROBES = 2;
+const CATCH_ALL_PROBES = Math.max(1, parseInt(process.env.CATCH_ALL_PROBES, 10) || 2);
+
+// How many times to retry a temporary (4xx / greylisting) SMTP reply before
+// giving up as 'unknown'. Greylisting is very common on well-run mail servers,
+// so a couple of spaced retries recover a lot of otherwise-unknown mailboxes.
+const SMTP_MAX_RETRIES = Math.max(0, parseInt(process.env.SMTP_RETRIES, 10) || 2);
+// Cap how many MX hosts we try per address, so a domain whose servers all
+// silently drop connections can't cost (all-MX × timeout) seconds. The highest-
+// priority handful is where real mailboxes answer; backups beyond that rarely help.
+const MAX_MX_HOSTS = Math.max(1, parseInt(process.env.MAX_MX_HOSTS, 10) || 3);
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Try each MX host in priority order until one actually answers the SMTP
+// conversation. Many domains' PRIMARY MX greylists or silently drops probe
+// connections while a lower-priority backup MX answers cleanly, so only ever
+// trying mxRecords[0] (the old behaviour) threw away a large share of real,
+// verifiable mailboxes as "unknown". Each host is still SSRF-vetted (resolved to
+// a public IP once, connected to that exact IP).
+// Returns { result, host, ip } — result.connected is true if any host replied.
+async function smtpProbeFallback(mxHosts, email, isCatchAll) {
+    let last = { code: 0, connected: false, message: 'No reachable MX host' };
+    for (const host of mxHosts.slice(0, MAX_MX_HOSTS)) {
+        const ip = await resolvePublicMxIp(host);
+        if (!ip) { last = { code: 0, connected: false, message: 'Mail server resolves to a non-public address (blocked)' }; continue; }
+        const r = await checkSMTP(host, email, isCatchAll, ip);
+        if (r.connected) return { result: r, host, ip };
+        last = r;
+    }
+    return { result: last, host: null, ip: null };
+}
 
 // Build a random local-part that is extremely unlikely to be a real mailbox.
 // The 'zz' prefix makes these probes easy to recognise in logs/tests.
@@ -241,7 +270,6 @@ async function verifyEmail(email) {
     // Sort by priority (lower number = higher priority)
     mxRecords.sort((a, b) => a.priority - b.priority);
     result.mxRecords = mxRecords.map(r => r.exchange);
-    const primaryMx = result.mxRecords[0];
 
     // 4. Provider detection (drives provider-specific deep checks below)
     result.provider = detectProvider(result.mxRecords);
@@ -258,25 +286,15 @@ async function verifyEmail(email) {
         }
     }
 
-    // SSRF guard: resolve the MX host to a public IP ONCE and connect to that
-    // exact IP, so a rebinding attack can't slip an internal address in at
-    // connect time.
-    const mxIp = await resolvePublicMxIp(primaryMx);
-    if (!mxIp) {
-        result.status = 'unknown';
-        result.confidence = 10;
-        result.reason = 'Mail server resolves to a non-public address (blocked)';
-        return result;
-    }
-
-    // 6. SMTP handshake for the real address (connect to the vetted IP)
-    let smtpResult = await checkSMTP(primaryMx, email, false, mxIp);
+    // 6. SMTP handshake for the real address. Try every MX host (priority order)
+    // until one answers — each is SSRF-vetted and connected to by its public IP.
+    let { result: smtpResult, host: liveMx, ip: mxIp } = await smtpProbeFallback(result.mxRecords, email, false);
     result.smtpConnected = smtpResult.connected;
     result.smtpCode = smtpResult.code;
 
     if (!smtpResult.connected) {
-        // SMTP unreachable (commonly: outbound port 25 is blocked). Fall back to
-        // any provider-level signal we already gathered.
+        // No MX host answered (commonly: outbound port 25 is blocked). Fall back
+        // to any provider-level signal we already gathered.
         if (m365 && m365.exists === true) {
             setDeliverable(result, email, 80, 'Microsoft 365 confirms the mailbox exists (SMTP unreachable)');
         } else {
@@ -318,24 +336,30 @@ async function verifyEmail(email) {
         return result;
     }
 
-    // Temporary failure / greylisting -> wait and retry once
+    // Temporary failure / greylisting -> wait and retry (with backoff) on the
+    // SAME host that answered. Greylisting deliberately defers the first attempt,
+    // so retrying recovers many mailboxes that would otherwise be 'unknown'.
     if (smtpResult.code >= 400 && smtpResult.code < 500) {
-        await new Promise(r => setTimeout(r, 3000));
-        const retry = await checkSMTP(primaryMx, email, false, mxIp);
-        result.smtpCode = retry.code;
-        if (retry.code >= 500 && retry.code < 600) {
-            result.status = 'invalid';
-            result.confidence = 80;
-            result.reason = `Mailbox does not exist (SMTP ${retry.code})`;
-            return result;
+        for (let attempt = 1; attempt <= SMTP_MAX_RETRIES; attempt++) {
+            await sleep(3000 * attempt);
+            const retry = await checkSMTP(liveMx, email, false, mxIp);
+            result.smtpCode = retry.code;
+            if (!retry.connected) break;                    // lost the host — stop retrying
+            if (retry.code >= 500 && retry.code < 600) {
+                result.status = 'invalid';
+                result.confidence = 80;
+                result.reason = `Mailbox does not exist (SMTP ${retry.code})`;
+                return result;
+            }
+            smtpResult = retry;
+            if (retry.code === 250) break;                  // accepted -> continue as a 250
         }
-        if (retry.code !== 250) {
+        if (smtpResult.code !== 250) {
             result.status = 'unknown';
             result.confidence = 30;
-            result.reason = `Temporary failure / greylisting (SMTP ${retry.code})`;
+            result.reason = `Temporary failure / greylisting (SMTP ${smtpResult.code})`;
             return result;
         }
-        smtpResult = retry; // retry accepted -> continue as a 250
     }
 
     if (smtpResult.code === 250) {
@@ -344,7 +368,9 @@ async function verifyEmail(email) {
         const probeMessages = [];
         for (let i = 0; i < CATCH_ALL_PROBES; i++) {
             const fake = `${randomLocalPart()}@${domain}`;
-            const probe = await checkSMTP(primaryMx, fake, true, mxIp);
+            // Probe the SAME host that accepted the real address, so the
+            // comparison is apples-to-apples.
+            const probe = await checkSMTP(liveMx, fake, true, mxIp);
             if (probe.code === 250) {
                 acceptedProbes++;
                 probeMessages.push(probe.message);

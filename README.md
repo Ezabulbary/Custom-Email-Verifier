@@ -139,7 +139,25 @@ To reach 90–95% accuracy:
    server IP's **reverse DNS (PTR)** to that hostname — mail servers weight a
    matching PTR heavily.
 3. Keep `VERIFY_CONCURRENCY` moderate (default 10); lots of `unknown` from one
-   provider means you're being rate-limited — lower it.
+   provider means you're being rate-limited, lower it.
+
+**Deeper results (when port 25 is open).** The engine already tries to squeeze
+out every verdict:
+
+- **Multi-MX fallback** — each address is tried against several MX hosts in
+  priority order (`MAX_MX_HOSTS`, default 3), because a domain's primary MX often
+  greylists or silently drops probes while a backup answers cleanly. This alone
+  recovers a large share of addresses that would otherwise be `unknown`.
+- **Greylisting retries** — temporary `4xx` replies are retried with backoff
+  (`SMTP_RETRIES`, default 2) on the host that answered.
+- **Catch-all resolution** — random-probe detection (`CATCH_ALL_PROBES`),
+  reply-differencing, and the Microsoft 365 mailbox API.
+
+If catch-all always shows **0** and accuracy is low (e.g. 150/500 where another
+tool gets 300+), the cause is almost always **port 25 blocked** — every SMTP
+check times out, so no address ever reaches catch-all detection. Confirm at
+`/health` (`"port25": false`), then do steps 1–2 above; a correct HELO domain +
+matching PTR + SPF is what closes most of the gap versus commercial tools.
 
 Alternative without port 25: route checks through a commercial API
 (Reoon/ZeroBounce/NeverBounce) — pluggable on request.
