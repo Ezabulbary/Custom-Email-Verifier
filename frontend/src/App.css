@@ -1131,6 +1131,9 @@
 }
 
 /* --- Profile: password fields with lock + eye --- */
+/* Password input with a show/hide eye but no lock icon (auth forms). */
+.pw-box { position: relative; display: flex; align-items: center; }
+.pw-box .input-field { padding-right: 2.6rem; width: 100%; }
 .pw-field { position: relative; display: flex; align-items: center; }
 .pw-field .input-field { padding-left: 2.3rem; padding-right: 2.5rem; width: 100%; }
 .pw-lock { position: absolute; left: 0.75rem; color: var(--text-secondary); pointer-events: none; }

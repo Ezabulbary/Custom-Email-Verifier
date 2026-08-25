@@ -1008,6 +1008,29 @@ const AuthShell = ({ title, subtitle, error, children, alt, reverse, brandTitle,
   );
 };
 
+// Password input with a show/hide toggle, for the auth forms (which supply
+// their own <label>). My Account uses the fuller PasswordInput (with a lock).
+const PasswordBox = ({ value, onChange, placeholder, required, minLength, autoComplete }) => {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="pw-box">
+      <input
+        type={show ? 'text' : 'password'}
+        className="input-field"
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        required={required}
+        minLength={minLength}
+        autoComplete={autoComplete}
+      />
+      <button type="button" className="pw-eye" onClick={() => setShow(s => !s)} tabIndex={-1} aria-label={show ? 'Hide password' : 'Show password'}>
+        {show ? <EyeOff size={16} /> : <Eye size={16} />}
+      </button>
+    </div>
+  );
+};
+
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -1083,7 +1106,7 @@ const Login = () => {
             <label>Password</label>
             <Link to="/forgot-password" className="forgot-link">Forgot password?</Link>
           </div>
-          <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" placeholder="••••••••" required />
+          <PasswordBox value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" required autoComplete="current-password" />
           <button type="submit" className="btn-primary" style={{marginTop:'1rem'}} disabled={loading}>
             {loading ? <Loader2 className="loader" size={18} /> : null} Sign In
           </button>
@@ -1186,7 +1209,7 @@ const ResetPassword = () => {
       ) : (
         <form onSubmit={handleSubmit} className="form-group">
           <label>New password</label>
-          <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" placeholder="At least 8 characters" required minLength={8} />
+          <PasswordBox value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters" required minLength={8} autoComplete="new-password" />
           <span style={{fontSize:'0.8rem', color:'var(--text-secondary)'}}>At least 8 characters.</span>
           <button type="submit" className="btn-primary" style={{marginTop:'1rem'}} disabled={loading}>
             {loading ? <Loader2 className="loader" size={18} /> : null} Update password
@@ -1232,7 +1255,7 @@ const Register = () => {
         <label>Email</label>
         <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="input-field" placeholder="you@company.com" required />
         <label>Password</label>
-        <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" placeholder="At least 8 characters" required minLength={8} />
+        <PasswordBox value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters" required minLength={8} autoComplete="new-password" />
         <span style={{fontSize:'0.8rem', color:'var(--text-secondary)'}}>At least 8 characters.</span>
         <button type="submit" className="btn-primary" style={{marginTop:'1rem'}}>Sign Up</button>
       </form>
