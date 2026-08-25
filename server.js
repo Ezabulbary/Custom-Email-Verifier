@@ -38,6 +38,29 @@ const resetLimiter  = rateLimit({ name: 'reset',  windowMs: 60 * 60 * 1000, max:
 const billingLimiter = rateLimit({ name: 'billing', windowMs: 60 * 60 * 1000, max: 20, message: 'Too many payment requests. Please try later.' });
 
 const app = express();
+app.disable('x-powered-by'); // don't advertise the framework/version
+
+// Behind nginx (or any reverse proxy), Express must be told how many proxy hops
+// to trust so req.ip / req.secure are derived from the RIGHT X-Forwarded-* entry
+// and NOT from a value the client prepended. Default 1 (a single nginx in front);
+// set TRUST_PROXY=0 when the app is exposed directly, or a larger number / a
+// preset ('loopback', a CIDR) for multiple proxies.
+const _tp = process.env.TRUST_PROXY;
+app.set('trust proxy', _tp === undefined ? 1 : (/^\d+$/.test(_tp) ? Number(_tp) : _tp));
+
+// Baseline security headers on every response (no external dependency). HSTS is
+// only sent over HTTPS (and without includeSubDomains, so it can't force sibling
+// subdomains onto TLS). A restrictive Content-Security-Policy is intentionally
+// left to the reverse proxy, since this app uses inline styles + Google Fonts +
+// Firebase + Stripe and a wrong CSP silently breaks the UI.
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');                 // no clickjacking / embedding
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+    if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
+    next();
+});
 
 console.log(`[Store] Active data store: ${store.backend.toUpperCase()}`);
 
@@ -1324,7 +1347,7 @@ app.delete('/admin/users/:id', authenticateToken, requireAdmin, async (req, res)
 // per-path proxy rules to maintain (a missing /history or /admin rule is exactly
 // what makes Tasks & Results fail with "unexpected response HTTP 200"). The API
 // routes above always take precedence; anything else falls back to index.html.
-const API_PREFIX_RE = /^\/(auth|verify|bounce|history|admin|health)(\/|$)/;
+const API_PREFIX_RE = /^\/(auth|verify|bounce|catchall|billing|history|admin|health)(\/|$)/;
 const DIST_DIR = require('path').join(__dirname, 'frontend', 'dist');
 if (fs.existsSync(DIST_DIR)) {
     app.use(express.static(DIST_DIR));

@@ -15,10 +15,11 @@ setInterval(() => {
 }, 60 * 1000).unref?.();
 
 function clientIp(req) {
-    // Trust the reverse proxy's X-Forwarded-For first hop if present, else the
-    // socket address. (Behind nginx this is the real client IP.)
-    const xff = req.headers['x-forwarded-for'];
-    if (xff) return String(xff).split(',')[0].trim();
+    // Use Express's computed req.ip, which honours the app's `trust proxy`
+    // setting: behind a correctly-configured reverse proxy it is the real client
+    // IP, and it CANNOT be spoofed by a client-supplied X-Forwarded-For header
+    // (parsing that header directly would let anyone reset their own limit by
+    // sending a random value). Falls back to the socket address.
     return req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
 }
 

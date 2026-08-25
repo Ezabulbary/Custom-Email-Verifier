@@ -3055,8 +3055,25 @@ const ProtectedRoute = ({ children, adminOnly = false }) => {
   return <DashboardLayout>{children}</DashboardLayout>;
 };
 
+// Keep private app pages (dashboard, admin, auth) out of search engines by
+// flipping the shared <meta name="robots"> tag per route. Public marketing and
+// legal pages stay index,follow (the default set in index.html). This complements
+// robots.txt (which blocks crawling of the same paths).
+const PRIVATE_ROUTE_RE = /^\/(dashboard|admin|login|register|forgot-password|reset-password)(\/|$)/;
+const RobotsMeta = () => {
+  const location = useLocation();
+  useEffect(() => {
+    let tag = document.querySelector('meta[name="robots"]');
+    if (!tag) { tag = document.createElement('meta'); tag.setAttribute('name', 'robots'); document.head.appendChild(tag); }
+    tag.setAttribute('content', PRIVATE_ROUTE_RE.test(location.pathname) ? 'noindex, nofollow' : 'index, follow');
+  }, [location.pathname]);
+  return null;
+};
+
 function AppRoutes() {
   return (
+    <>
+    <RobotsMeta />
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/pricing" element={<Navigate to="/#pricing" replace />} />
@@ -3083,6 +3100,7 @@ function AppRoutes() {
       <Route path="/admin/user/:uid" element={<ProtectedRoute adminOnly><AdminUserHistory /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" />} />
     </Routes>
+    </>
   );
 }
 

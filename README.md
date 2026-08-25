@@ -352,6 +352,18 @@ A full review was performed; recorded findings and fixes:
 - **Payments:** Stripe webhook is signature-verified (constant-time, multi-sig,
   5-minute timestamp tolerance) with per-event idempotency — replays and
   test-mode events never grant credits; checkout redirect origin can't be forged.
+- **High — rate-limit bypass fixed (behind a proxy):** the limiter now keys on
+  Express's `req.ip`, computed from the app's `trust proxy` setting, instead of
+  reading the raw `X-Forwarded-For` first hop (which a client could spoof to get
+  a fresh bucket per request). Set `TRUST_PROXY` to the number of proxies in
+  front (default 1 = a single nginx; `0` if exposed directly).
+- **Security headers:** every response sends `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY` (anti-clickjacking), `Referrer-Policy`, and (over
+  HTTPS) `Strict-Transport-Security`; the `X-Powered-By` banner is disabled. A
+  strict CSP is left to the reverse proxy to avoid breaking inline styles/fonts.
+- **Search-engine hygiene:** `robots.txt` disallows the app paths, a per-route
+  `noindex, nofollow` meta keeps dashboard/admin/auth pages out of search, and a
+  `sitemap.xml` lists the public pages. The landing + legal pages stay indexable.
 - **Also verified:** owner-scoped history/jobs, superadmins hidden from plain
   admins, no self role-change/delete, generic error responses, secrets
   git-ignored (`.env`, `serviceAccount.json`, `.jwt_secret`), CSV export
@@ -369,6 +381,7 @@ A full review was performed; recorded findings and fixes:
 | `PORT` | no | API port (default 3001). |
 | `JWT_SECRET` | prod | Signs login tokens (48-byte hex recommended). |
 | `CORS_ORIGINS` | cross-origin only | Comma-separated allowed frontend origins. |
+| `TRUST_PROXY` | behind a proxy | Proxy hops to trust for client IP / HTTPS (default 1 = one nginx; 0 if direct). |
 | `FRONTEND_URL` | resets + Stripe | Base URL for reset links and checkout redirects. |
 | `SUPERADMIN_EMAIL` / `ADMIN_EMAIL` | no | Promoted to that role at startup. |
 | `FIREBASE_SERVICE_ACCOUNT` / `GOOGLE_APPLICATION_CREDENTIALS` | yes* | Firestore + Google sign-in (*or `serviceAccount.json` in root — auto-detected). |
