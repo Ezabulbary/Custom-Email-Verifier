@@ -1359,15 +1359,41 @@ app.get('/admin/users/:id/history', authenticateToken, requireAdmin, async (req,
     }
 });
 
+// Server-side duplicate guard: the same admin applying the SAME delta to the
+// SAME account within a few seconds is almost always a double-submit (double
+// Enter, double click, or a network retry), not two intended top-ups. The UI
+// also locks the row while a request is in flight; this is the backstop.
+const recentCreditOps = new Map(); // "admin|user|delta" -> timestamp
+const CREDIT_DEDUPE_MS = 5000;
+setInterval(() => {
+    const now = Date.now();
+    for (const [k, t] of recentCreditOps) if (now - t > CREDIT_DEDUPE_MS) recentCreditOps.delete(k);
+}, 30000).unref?.();
+
+// Largest single adjustment allowed, so a typo/paste can't mint millions.
+const MAX_CREDIT_DELTA = Math.max(1, parseInt(process.env.MAX_CREDIT_DELTA, 10) || 1000000);
+
 // Adjust a user's credits by a (positive or negative) delta.
 app.post('/admin/users/:id/credits', authenticateToken, requireAdmin, async (req, res) => {
     const id = readId(req.params.id);
     const delta = parseInt(req.body.delta, 10);
     if (!id || Number.isNaN(delta)) return res.status(400).json({ error: 'Invalid input' });
+    if (delta === 0) return res.status(400).json({ error: 'Amount must not be zero' });
+    if (Math.abs(delta) > MAX_CREDIT_DELTA) {
+        return res.status(400).json({ error: `Amount too large (max ${MAX_CREDIT_DELTA.toLocaleString()} per adjustment)` });
+    }
+
+    const opKey = `${req.user.id}|${id}|${delta}`;
+    const last = recentCreditOps.get(opKey);
+    if (last && Date.now() - last < CREDIT_DEDUPE_MS) {
+        return res.status(409).json({ error: 'That same adjustment was just applied. Wait a moment before repeating it.' });
+    }
+    recentCreditOps.set(opKey, Date.now());
 
     try {
         const targetRole = await store.getRoleById(id);
         if (targetRole === null || targetHiddenFromViewer(targetRole, req.viewerRole)) {
+            recentCreditOps.delete(opKey);       // nothing applied; let them retry
             return res.status(404).json({ error: 'User not found' });
         }
         const credits = await store.adjustCredits(id, delta);
@@ -1379,6 +1405,7 @@ app.post('/admin/users/:id/credits', authenticateToken, requireAdmin, async (req
         });
         res.json({ success: true, credits });
     } catch (e) {
+        recentCreditOps.delete(opKey);           // failed; don't block a retry
         console.error('Adjust credits error:', e.message);
         res.status(500).json({ error: 'Database error' });
     }

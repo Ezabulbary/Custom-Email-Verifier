@@ -3017,6 +3017,7 @@ const AdminPanel = () => {
   // here is ADDED to the user's current credits when you press Enter / ✓.
   const [credAdd, setCredAdd] = useState({});
   const [credFlash, setCredFlash] = useState({}); // transient "+N added" per row
+  const [credBusy, setCredBusy] = useState({});   // per-row in-flight lock (prevents double submit)
 
   // Superadmins may assign any role; a plain admin may only set user/admin.
   const roleOptions = viewerRole === 'superadmin' ? ['user', 'admin', 'superadmin'] : ['user', 'admin'];
@@ -3041,21 +3042,41 @@ const AdminPanel = () => {
   };
 
   // Apply the row's add-amount: ADD it to the user's existing credits (the
-  // backend does existing + delta) and reset the box.
+  // backend does existing + delta) and reset the box. `credBusy` is an
+  // in-flight lock per row: without it, pressing Enter twice before the first
+  // request returned submitted the same amount twice (double add).
   const applyAdd = async (id) => {
+    if (credBusy[id]) return;                     // in-flight: ignore repeat Enter/clicks
     const delta = parseInt(credAdd[id], 10);
     if (Number.isNaN(delta) || delta === 0) { setCredAdd(m => ({ ...m, [id]: '' })); return; }
-    const data = await apiFetch(`/admin/users/${id}/credits`, { method: 'POST', body: JSON.stringify({ delta }) });
-    if (data.error) return alert(data.error);
-    setUsers(us => us.map(u => u.id === id ? { ...u, credits: data.credits } : u));
-    setCredAdd(m => ({ ...m, [id]: '' }));
-    // brief confirmation of what was added (not the running balance)
-    const label = `${delta > 0 ? '+' : ''}${delta} added`;
-    setCredFlash(m => ({ ...m, [id]: label }));
-    setTimeout(() => setCredFlash(m => { const n = { ...m }; delete n[id]; return n; }), 2500);
-    // If the admin changed their OWN credits, refresh the auth user so the
-    // sidebar and Overview reflect it immediately (no page reload needed).
-    if (String(id) === String(user.id)) refreshUser();
+    if (delta < 0 && !window.confirm(`Remove ${Math.abs(delta).toLocaleString()} credits from this account?`)) return;
+    setCredBusy(m => ({ ...m, [id]: true }));
+    try {
+      let data;
+      try {
+        data = await apiFetch(`/admin/users/${id}/credits`, { method: 'POST', body: JSON.stringify({ delta }) });
+      } catch (err) {
+        // The server rejects an identical repeat within a few seconds (409) as a
+        // double-submit. Clear the box quietly instead of alarming the admin.
+        if (String(err.message || '').includes('just applied')) { setCredAdd(m => ({ ...m, [id]: '' })); return; }
+        return alert(friendlyError(err));
+      }
+      if (data.error) return alert(data.error);
+      // Update BOTH the live balance and the Total Credits column (balance + used).
+      setUsers(us => us.map(u => u.id === id
+        ? { ...u, credits: data.credits, total_credits: (data.credits || 0) + (u.used_credits || 0) }
+        : u));
+      setCredAdd(m => ({ ...m, [id]: '' }));
+      // brief confirmation of what changed (not the running balance)
+      const label = delta > 0 ? `+${delta.toLocaleString()} added` : `${delta.toLocaleString()} removed`;
+      setCredFlash(m => ({ ...m, [id]: label }));
+      setTimeout(() => setCredFlash(m => { const n = { ...m }; delete n[id]; return n; }), 2500);
+      // If the admin changed their OWN credits, refresh the auth user so the
+      // sidebar and Overview reflect it immediately (no page reload needed).
+      if (String(id) === String(user.id)) refreshUser();
+    } finally {
+      setCredBusy(m => { const n = { ...m }; delete n[id]; return n; });
+    }
   };
   const setRole = async (u, role) => {
     if (role === u.role) return;
@@ -3102,20 +3123,25 @@ const AdminPanel = () => {
                     {/* The Add Credits cell is a control - clicking it must NOT open the history page. */}
                     <td onClick={(e) => e.stopPropagation()} style={{cursor:'default'}}>
                       <div style={{display:'flex', alignItems:'center', gap:'0.35rem'}}>
-                        <button className="icon-btn" title="Decrease amount by 100" onClick={() => stepAdd(u.id, -100)}><Minus size={14}/></button>
+                        <button className="icon-btn" title="Decrease amount by 100" disabled={!!credBusy[u.id]} onClick={() => stepAdd(u.id, -100)}><Minus size={14}/></button>
                         <input
-                          className="cred-add-input"
+                          className={`cred-add-input ${parseInt(credAdd[u.id], 10) < 0 ? 'neg' : ''}`}
                           type="text"
                           inputMode="numeric"
                           placeholder="0"
                           value={credAdd[u.id] ?? ''}
+                          disabled={!!credBusy[u.id]}
                           onChange={(e) => typeAdd(u.id, e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') applyAdd(u.id); }}
-                          title="Amount to add to this user's credits, then press Enter or ✓"
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyAdd(u.id); } }}
+                          title="Amount to add (negative removes), then press Enter or the check button"
                         />
-                        <button className="icon-btn" title="Increase amount by 100" onClick={() => stepAdd(u.id, 100)}><Plus size={14}/></button>
-                        <button className="icon-btn primary" title="Add to existing credits" onClick={() => applyAdd(u.id)}><CheckCircle2 size={15}/></button>
-                        {credFlash[u.id] && <span className="cred-flash">{credFlash[u.id]}</span>}
+                        <button className="icon-btn" title="Increase amount by 100" disabled={!!credBusy[u.id]} onClick={() => stepAdd(u.id, 100)}><Plus size={14}/></button>
+                        <button className="icon-btn primary" title="Apply to this account's credits" disabled={!!credBusy[u.id]} onClick={() => applyAdd(u.id)}>
+                          {credBusy[u.id] ? <Loader2 className="loader" size={15}/> : <CheckCircle2 size={15}/>}
+                        </button>
+                        {credFlash[u.id]
+                          ? <span className="cred-flash">{credFlash[u.id]}</span>
+                          : <span className="cred-bal" title="Current balance">Bal: {(u.credits ?? 0).toLocaleString()}</span>}
                       </div>
                     </td>
                     <td title="Lifetime credits (current balance + used)"><strong>{(u.total_credits ?? u.credits ?? 0).toLocaleString()}</strong></td>

@@ -548,7 +548,11 @@
   background: var(--bg-surface); color: var(--text-primary); font-size: 0.9rem; font-weight: 600;
 }
 .cred-add-input:focus { outline: none; border-color: var(--accent-color); }
+.cred-add-input.neg { color: #dc2626; border-color: #fecaca; }
+.cred-add-input:disabled { opacity: 0.55; }
+.icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .cred-flash { font-size: 0.78rem; color: #059669; font-weight: 600; white-space: nowrap; }
+.cred-bal { font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; }
 
 /* --- Public / Landing pages --- */
 .public-page { min-height: 100vh; background: var(--bg-color); }
