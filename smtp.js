@@ -130,4 +130,80 @@ async function checkSMTP(mxRecord, targetEmail, isCatchAllCheck = false, connect
     });
 }
 
-module.exports = { checkSMTP };
+// Verify MULTIPLE recipients in ONE SMTP session: greeting -> EHLO/HELO ->
+// MAIL FROM -> RCPT TO for each recipient (collecting each reply) -> QUIT.
+//
+// Why this matters: opening a fresh connection per recipient (real address, then
+// separate catch-all probes) makes mail servers rate-limit/greylist the extra
+// connections, so probes came back 4xx and catch-all could never be confirmed.
+// Once MAIL FROM + the first RCPT succeed, later RCPTs in the SAME session get
+// real answers, so a catch-all domain reliably accepts the random probe here.
+//
+// Returns { connected, results } where results[i] = { code, message, connected }
+// aligned to recipients[i]. `connected` (session-level) is true once MAIL FROM
+// was accepted (the RCPT phase actually ran).
+async function checkSMTPMulti(mxRecord, recipients, connectHost = null) {
+    await delay(100 + Math.random() * 200);
+
+    return new Promise((resolve) => {
+        const socket = new net.Socket();
+        let step = 0, heloTried = false, buffer = '', ri = 0, sessionOk = false, settled = false;
+        const results = recipients.map(() => ({ code: 0, message: '', connected: false }));
+
+        const finish = (extra) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            try { socket.destroy(); } catch { /* already closed */ }
+            resolve({ connected: sessionOk, results, ...(extra || {}) });
+        };
+        const timeout = setTimeout(() => finish({ message: 'Connection timeout' }), TIMEOUT_MS);
+        const send = (cmd) => socket.write(cmd + '\r\n');
+
+        const handleReply = (code, line) => {
+            switch (step) {
+                case 0: // greeting
+                    if (code === 220) { step = 1; send(`EHLO ${HELO_DOMAIN}`); }
+                    else finish({ message: 'Unexpected greeting' });
+                    break;
+                case 1: // EHLO (HELO fallback once)
+                    if (code === 250) { step = 2; send(`MAIL FROM:<${MAIL_FROM}>`); }
+                    else if (!heloTried) { heloTried = true; send(`HELO ${HELO_DOMAIN}`); }
+                    else finish({ message: 'EHLO/HELO rejected' });
+                    break;
+                case 2: // MAIL FROM
+                    if (code === 250) { sessionOk = true; step = 3; send(`RCPT TO:<${recipients[ri]}>`); }
+                    else finish({ message: 'MAIL FROM rejected' });
+                    break;
+                case 3: // one RCPT reply per recipient
+                    results[ri] = { code, message: line.trim(), connected: true };
+                    ri++;
+                    if (ri < recipients.length) send(`RCPT TO:<${recipients[ri]}>`);
+                    else { step = 4; send('QUIT'); }
+                    break;
+                case 4: // QUIT
+                    finish();
+                    break;
+            }
+        };
+
+        socket.on('data', (data) => {
+            buffer += data.toString();
+            let nl;
+            while ((nl = buffer.indexOf('\n')) !== -1) {
+                const line = buffer.slice(0, nl).replace(/\r$/, '');
+                buffer = buffer.slice(nl + 1);
+                if (line.length < 3) continue;
+                const code = parseInt(line.substring(0, 3), 10);
+                if (Number.isNaN(code)) continue;
+                if (line.charAt(3) === '-') continue;   // continuation line
+                handleReply(code, line);
+            }
+        });
+        socket.on('error', (err) => finish({ message: err.message }));
+        socket.on('close', () => finish());
+        socket.connect(SMTP_PORT, connectHost || mxRecord);
+    });
+}
+
+module.exports = { checkSMTP, checkSMTPMulti };

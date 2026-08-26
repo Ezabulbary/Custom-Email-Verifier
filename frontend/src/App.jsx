@@ -121,16 +121,111 @@ const AuthProvider = ({ children }) => {
 
 // Poll a background bulk/CSV verification job until it finishes, reporting
 // progress along the way. Resolves with the final status (incl. batchId).
-const pollJob = async (jobId, onProgress) => {
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const s = await apiFetch(`/verify/status/${jobId}`);
-    if (s.error) throw new Error(s.error);
-    if (onProgress) onProgress(s.processed || 0, s.total || 0);
-    if (s.status === 'completed') return s;
-    if (s.status === 'error') throw new Error(s.error || 'Verification failed');
-    await new Promise(r => setTimeout(r, 1500));
-  }
+// --- Background jobs, tracked app-wide -------------------------------------
+// Verification runs happen as background jobs on the server. Polling them from
+// inside a page meant navigating away unmounted the poller and the progress
+// "disappeared" (the server job kept running, but the UI forgot it). This
+// provider keeps ONE poller alive for the whole app, keyed by page, so progress
+// survives navigation and even a reload (active job ids are saved to
+// sessionStorage). Pages read their job via useJobs().get(page).
+const JobsContext = createContext(null);
+const useJobs = () => useContext(JobsContext);
+
+const JobsProvider = ({ children }) => {
+  // Lazy init from sessionStorage so an in-flight job survives a page reload.
+  const [jobs, setJobs] = useState(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem('bc_active_jobs') || '{}');
+      return (saved && typeof saved === 'object') ? saved : {};
+    } catch { return {}; }
+  });
+  const jobsRef = useRef(jobs);
+  useEffect(() => { jobsRef.current = jobs; }, [jobs]);
+
+  // Persist only still-processing jobs.
+  useEffect(() => {
+    try {
+      const active = {};
+      for (const [page, j] of Object.entries(jobs)) {
+        if (j && j.status === 'processing' && j.jobId) {
+          active[page] = { page, jobId: j.jobId, total: j.total, processed: j.processed, status: 'processing', label: j.label };
+        }
+      }
+      sessionStorage.setItem('bc_active_jobs', JSON.stringify(active));
+    } catch { /* ignore */ }
+  }, [jobs]);
+
+  // One poller for the app's lifetime.
+  useEffect(() => {
+    const iv = setInterval(async () => {
+      const entries = Object.entries(jobsRef.current).filter(([, j]) => j && j.status === 'processing' && j.jobId);
+      for (const [page, j] of entries) {
+        try {
+          const s = await apiFetch(`/verify/status/${j.jobId}`);
+          setJobs(m => {
+            const cur = m[page];
+            if (!cur || cur.jobId !== j.jobId) return m;   // replaced/cleared meanwhile
+            if (s.error) return { ...m, [page]: { ...cur, status: 'gone' } };
+            return { ...m, [page]: { ...cur,
+              processed: s.processed ?? cur.processed, total: s.total ?? cur.total,
+              status: s.status || cur.status, results: s.results ?? cur.results,
+              batchId: s.batchId ?? cur.batchId, batchNumber: s.batchNumber ?? cur.batchNumber } };
+          });
+        } catch { /* transient — retry next tick */ }
+      }
+    }, 1500);
+    return () => clearInterval(iv);
+  }, []);
+
+  const start = async (page, submitFn, { label } = {}) => {
+    const job = await submitFn();
+    if (job.error) throw new Error(job.error);
+    setJobs(m => ({ ...m, [page]: { page, jobId: job.jobId, total: job.total || 0, processed: 0, status: 'processing', results: null, batchId: null, label } }));
+    return job;
+  };
+  const clear = (page) => setJobs(m => { const n = { ...m }; delete n[page]; return n; });
+  const get = (page) => jobs[page];
+
+  return <JobsContext.Provider value={{ start, clear, get }}>{children}</JobsContext.Provider>;
+};
+
+// Per-page helper on top of JobsProvider. Returns live progress (survives
+// navigation) and a run() that starts a job; onComplete(results, job) fires once
+// when the job finishes (results is null if the job errored or aged out of the
+// server's memory, in which case just refresh history).
+const useJobRunner = (page, onComplete) => {
+  const jobsCtx = useJobs();
+  const { refreshUser } = useAuth();
+  const job = jobsCtx.get(page);
+  const status = job && job.status;
+  const handledRef = useRef(false);
+
+  useEffect(() => {
+    if (!job) { handledRef.current = false; return; }
+    if (status === 'completed' && !handledRef.current) {
+      handledRef.current = true;
+      (async () => {
+        let out = job.results;
+        if (!out && job.batchId) { try { const b = await apiFetch(`/history/${job.batchId}`); out = (b && b.results) || []; } catch { out = []; } }
+        try { await refreshUser(); } catch { /* ignore */ }
+        if (onComplete) onComplete(out || [], job);
+        jobsCtx.clear(page);
+      })();
+    } else if ((status === 'gone' || status === 'error') && !handledRef.current) {
+      handledRef.current = true;
+      if (onComplete) onComplete(null, job);
+      jobsCtx.clear(page);
+    }
+  }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const run = async (submitFn, opts) => {
+    handledRef.current = false;
+    try { await jobsCtx.start(page, submitFn, opts); }
+    catch (e) { alert(friendlyError(e)); }
+  };
+
+  const progress = status === 'processing' ? { processed: job.processed, total: job.total } : null;
+  return { job, progress, busy: status === 'processing', run };
 };
 
 // Simple progress bar for running jobs.
@@ -1564,27 +1659,31 @@ const EmailVerification = () => {
   const [historyVersion, setHistoryVersion] = useState(0);
   const [results, setResults] = useState([]);
   const [resultsTitle, setResultsTitle] = useState('Results');
-  const [progress, setProgress] = useState(null);
 
   const [email, setEmail] = useState('');
   const [singleLoading, setSingleLoading] = useState(false);
 
   const [bulkName, setBulkName] = useState('');
   const [bulkText, setBulkText] = useState('');
-  const [bulkLoading, setBulkLoading] = useState(false);
 
   const [csvName, setCsvName] = useState('');
   const [file, setFile] = useState(null);
-  const [csvLoading, setCsvLoading] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Bulk/CSV run as background jobs tracked app-wide, so progress survives
+  // switching pages. Single-email verify stays inline (it's instant).
+  const { progress, busy, run } = useJobRunner('verify', (out, job) => {
+    if (out) { setResults(out); setResultsTitle((job && job.label) || 'Results'); }
+    setHistoryVersion(v => v + 1);
+  });
 
   const pickFile = (f) => { if (f) { setFile(f); setShowMap(true); } };
 
   const verifySingle = async (e) => {
     e.preventDefault();
     if (!email.trim()) return;
-    setSingleLoading(true); setProgress(null);
+    setSingleLoading(true);
     try {
       const data = await apiFetch('/verify', { method: 'POST', body: JSON.stringify({ email: email.trim() }) });
       if (data.error) throw new Error(data.error);
@@ -1594,30 +1693,14 @@ const EmailVerification = () => {
     setSingleLoading(false);
   };
 
-  // Shared runner for the two background-job flows (bulk / CSV).
-  const runJob = async (submit, total, setLoading, title) => {
-    setLoading(true); setResults([]); setProgress({ processed: 0, total });
-    try {
-      const job = await submit();
-      if (job.error) throw new Error(job.error);
-      setProgress({ processed: 0, total: job.total });
-      const done = await pollJob(job.jobId, (p, t) => setProgress({ processed: p, total: t }));
-      let out = done.results;
-      if (!out && done.batchId) { const b = await apiFetch(`/history/${done.batchId}`); out = (b && b.results) || []; }
-      setResults(out || []); setResultsTitle(title);
-      await refreshUser(); setHistoryVersion(v => v + 1);
-    } catch (err) { alert(err.message); }
-    setProgress(null); setLoading(false);
-    return true;
-  };
-
   const verifyBulk = (e) => {
     e.preventDefault();
     const arr = bulkText.split('\n').map(s => s.trim()).filter(Boolean);
     if (!arr.length) return;
-    runJob(
+    setResults([]);
+    run(
       () => apiFetch('/verify/bulk', { method: 'POST', body: JSON.stringify({ emails: arr, name: bulkName.trim() || undefined }) }),
-      arr.length, setBulkLoading, 'Bulk results'
+      { label: 'Bulk results' }
     );
   };
 
@@ -1633,8 +1716,9 @@ const EmailVerification = () => {
       fd.append('dedupe', opts.dedupe ? '1' : '0');
       fd.append('labels', JSON.stringify(opts.labels || []));
     }
-    runJob(() => apiFetch('/verify/csv', { method: 'POST', body: fd }), 0, setCsvLoading, 'File results')
-      .then(() => { setFile(null); setShowMap(false); });
+    setResults([]);
+    run(() => apiFetch('/verify/csv', { method: 'POST', body: fd }), { label: 'File results' });
+    setFile(null); setShowMap(false);
   };
 
   return (
@@ -1665,8 +1749,8 @@ const EmailVerification = () => {
             <input type="text" className="input-field" value={bulkName} onChange={e => setBulkName(e.target.value)} placeholder="e.g. July Newsletter" maxLength={120} />
             <label style={{ marginTop: '0.9rem' }}>Email addresses (one per line)</label>
             <textarea className="input-field" style={{ minHeight: '170px' }} value={bulkText} onChange={e => setBulkText(e.target.value)} placeholder={"one@example.com\ntwo@example.com"} />
-            <button type="submit" className="btn-primary" disabled={bulkLoading} style={{ marginTop: '1rem' }}>
-              {bulkLoading ? <Loader2 className="loader" size={18} /> : <List size={18} />} Start Verification
+            <button type="submit" className="btn-primary" disabled={busy} style={{ marginTop: '1rem' }}>
+              {busy ? <Loader2 className="loader" size={18} /> : <List size={18} />} Start Verification
             </button>
           </form>
         </div>
@@ -1689,8 +1773,8 @@ const EmailVerification = () => {
             <p style={{ fontWeight: 500, margin: '0.5rem 0 0.25rem' }}>{file ? file.name : 'Drag & drop, or click to browse'}</p>
             <span className="muted-inline">CSV (any columns) or TXT (one email per line)</span>
           </div>
-          <button onClick={() => file && setShowMap(true)} className="btn-primary" disabled={!file || csvLoading} style={{ marginTop: '1rem' }}>
-            {csvLoading ? <Loader2 className="loader" size={18} /> : <Upload size={18} />} Start Verification
+          <button onClick={() => file && setShowMap(true)} className="btn-primary" disabled={!file || busy} style={{ marginTop: '1rem' }}>
+            {busy ? <Loader2 className="loader" size={18} /> : <Upload size={18} />} Start Verification
           </button>
         </div>
       </div>
@@ -1739,18 +1823,19 @@ const EmailVerification = () => {
 
 // Upload any file → get the estimated bounce rate and a deliverability breakdown.
 const BounceChecker = () => {
-  const { refreshUser } = useAuth();
   const [file, setFile] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(null);
   const [results, setResults] = useState(null);
   const [showMap, setShowMap] = useState(false);
   const [historyVersion, setHistoryVersion] = useState(0);
   const fileInputRef = useRef(null);
+  const { progress, busy, run } = useJobRunner('bounce', (out) => {
+    setResults(out || []);
+    setHistoryVersion(v => v + 1);
+  });
 
   const pickFile = (f) => { if (f) { setFile(f); setShowMap(true); } };
 
-  const run = async (opts) => {
+  const startBounce = (opts) => {
     if (!file) return;
     const fd = new FormData();
     fd.append('file', file);
@@ -1761,19 +1846,9 @@ const BounceChecker = () => {
       fd.append('labels', JSON.stringify(opts.labels || []));
       if (opts.name) fd.append('name', opts.name);
     }
-    setShowMap(false);
-    setLoading(true); setResults(null); setProgress({ processed: 0, total: 0 });
-    try {
-      const job = await apiFetch('/bounce/csv', { method: 'POST', body: fd });
-      if (job.error) throw new Error(job.error);
-      setProgress({ processed: 0, total: job.total });
-      const done = await pollJob(job.jobId, (p, t) => setProgress({ processed: p, total: t }));
-      let out = done.results;
-      if (!out && done.batchId) { const b = await apiFetch(`/history/${done.batchId}`); out = (b && b.results) || []; }
-      setResults(out || []);
-      await refreshUser(); setHistoryVersion(v => v + 1);
-    } catch (err) { alert(friendlyError(err)); }
-    setProgress(null); setLoading(false);
+    setShowMap(false); setResults(null);
+    run(() => apiFetch('/bounce/csv', { method: 'POST', body: fd }), { label: 'Bounce results' });
+    setFile(null);
   };
 
   const summary = React.useMemo(() => {
@@ -1824,8 +1899,8 @@ const BounceChecker = () => {
           <p style={{ fontWeight: 500, margin: '0.5rem 0 0.25rem' }}>{file ? file.name : 'Drag & drop, or click to browse'}</p>
           <span className="muted-inline">CSV (any columns) or TXT (one email per line)</span>
         </div>
-        <button onClick={() => file && setShowMap(true)} className="btn-primary" disabled={!file || loading} style={{ marginTop: '1rem' }}>
-          {loading ? <Loader2 className="loader" size={18} /> : <AlertCircle size={18} />} Check Bounce Rate
+        <button onClick={() => file && setShowMap(true)} className="btn-primary" disabled={!file || busy} style={{ marginTop: '1rem' }}>
+          {busy ? <Loader2 className="loader" size={18} /> : <AlertCircle size={18} />} Check Bounce Rate
         </button>
         {progress && <JobProgress processed={progress.processed} total={progress.total} />}
       </div>
@@ -1835,7 +1910,7 @@ const BounceChecker = () => {
           file={file}
           ctaLabel="Check Bounce Rate"
           onCancel={() => setShowMap(false)}
-          onStart={(opts) => run(opts)}
+          onStart={(opts) => startBounce(opts)}
         />
       )}
 
@@ -1897,8 +1972,11 @@ const CATCHALL_BUCKET = (status) => {
 const CatchAllVerifier = () => {
   const { refreshUser } = useAuth();
   const [results, setResults] = useState([]);
-  const [progress, setProgress] = useState(null);
   const [historyVersion, setHistoryVersion] = useState(0);
+  const { progress, busy, run } = useJobRunner('catchall', (out) => {
+    if (out) setResults(out);
+    setHistoryVersion(v => v + 1);
+  });
 
   const [email, setEmail] = useState('');
   const [singleLoading, setSingleLoading] = useState(false);
@@ -1917,18 +1995,15 @@ const CatchAllVerifier = () => {
     } catch { /* storage unavailable */ }
     return '';
   });
-  const [bulkLoading, setBulkLoading] = useState(false);
-
   const [file, setFile] = useState(null);
   const [showMap, setShowMap] = useState(false);
-  const [csvLoading, setCsvLoading] = useState(false);
   const fileInputRef = useRef(null);
   const pickFile = (f) => { if (f) { setFile(f); setShowMap(true); } };
 
   const verifySingle = async (e) => {
     e.preventDefault();
     if (!email.trim()) return;
-    setSingleLoading(true); setProgress(null);
+    setSingleLoading(true);
     try {
       const data = await apiFetch('/catchall', { method: 'POST', body: JSON.stringify({ email: email.trim() }) });
       if (data.error) throw new Error(data.error);
@@ -1938,26 +2013,12 @@ const CatchAllVerifier = () => {
     setSingleLoading(false);
   };
 
-  const runJob = async (submit, total, setLoading) => {
-    setLoading(true); setResults([]); setProgress({ processed: 0, total });
-    try {
-      const job = await submit();
-      if (job.error) throw new Error(job.error);
-      setProgress({ processed: 0, total: job.total });
-      const done = await pollJob(job.jobId, (p, t) => setProgress({ processed: p, total: t }));
-      let out = done.results;
-      if (!out && done.batchId) { const b = await apiFetch(`/history/${done.batchId}`); out = (b && b.results) || []; }
-      setResults(out || []);
-      await refreshUser(); setHistoryVersion(v => v + 1);
-    } catch (err) { alert(friendlyError(err)); }
-    setProgress(null); setLoading(false);
-  };
-
   const verifyBulk = (e) => {
     e.preventDefault();
     const arr = bulkText.split('\n').map(s => s.trim()).filter(Boolean);
     if (!arr.length) return;
-    runJob(() => apiFetch('/catchall/bulk', { method: 'POST', body: JSON.stringify({ emails: arr }) }), arr.length, setBulkLoading);
+    setResults([]);
+    run(() => apiFetch('/catchall/bulk', { method: 'POST', body: JSON.stringify({ emails: arr }) }), { label: 'Catch-all results' });
   };
 
   const verifyCsv = (opts) => {
@@ -1970,8 +2031,9 @@ const CatchAllVerifier = () => {
       fd.append('dedupe', opts.dedupe ? '1' : '0');
       fd.append('labels', JSON.stringify(opts.labels || []));
     }
-    runJob(() => apiFetch('/catchall/csv', { method: 'POST', body: fd }), 0, setCsvLoading)
-      .then(() => { setFile(null); setShowMap(false); });
+    setResults([]);
+    run(() => apiFetch('/catchall/csv', { method: 'POST', body: fd }), { label: 'Catch-all results' });
+    setFile(null); setShowMap(false);
   };
 
   const summary = React.useMemo(() => {
@@ -2007,8 +2069,8 @@ const CatchAllVerifier = () => {
           <form onSubmit={verifyBulk} className="form-group">
             <label>Catch-all addresses (one per line)</label>
             <textarea className="input-field" style={{ minHeight: '170px' }} value={bulkText} onChange={e => setBulkText(e.target.value)} placeholder={"one@domain.com\ntwo@domain.com"} />
-            <button type="submit" className="btn-primary" disabled={bulkLoading} style={{ marginTop: '1rem' }}>
-              {bulkLoading ? <Loader2 className="loader" size={18} /> : <List size={18} />} Start Verification
+            <button type="submit" className="btn-primary" disabled={busy} style={{ marginTop: '1rem' }}>
+              {busy ? <Loader2 className="loader" size={18} /> : <List size={18} />} Start Verification
             </button>
           </form>
         </div>
@@ -2024,8 +2086,8 @@ const CatchAllVerifier = () => {
             <p style={{ fontWeight: 500, margin: '0.5rem 0 0.25rem' }}>{file ? file.name : 'Drag & drop, or click to browse'}</p>
             <span className="muted-inline">CSV (any columns) or TXT (one email per line)</span>
           </div>
-          <button onClick={() => file && setShowMap(true)} className="btn-primary" disabled={!file || csvLoading} style={{ marginTop: '1rem' }}>
-            {csvLoading ? <Loader2 className="loader" size={18} /> : <Upload size={18} />} Start Verification
+          <button onClick={() => file && setShowMap(true)} className="btn-primary" disabled={!file || busy} style={{ marginTop: '1rem' }}>
+            {busy ? <Loader2 className="loader" size={18} /> : <Upload size={18} />} Start Verification
           </button>
         </div>
       </div>
@@ -3363,7 +3425,9 @@ function AppRoutes() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppRoutes />
+      <JobsProvider>
+        <AppRoutes />
+      </JobsProvider>
     </AuthProvider>
   );
 }

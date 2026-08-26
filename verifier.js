@@ -4,7 +4,7 @@ const dnsPromises = dns.promises;
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
 const { isDisposable } = require('./disposable');
-const { checkSMTP } = require('./smtp');
+const { checkSMTPMulti } = require('./smtp');
 const { detectProvider, checkMicrosoft365 } = require('./providers');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -75,23 +75,39 @@ const SMTP_MAX_RETRIES = Math.max(0, parseInt(process.env.SMTP_RETRIES, 10) || 2
 const MAX_MX_HOSTS = Math.max(1, parseInt(process.env.MAX_MX_HOSTS, 10) || 3);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// Try each MX host in priority order until one actually answers the SMTP
-// conversation. Many domains' PRIMARY MX greylists or silently drops probe
-// connections while a lower-priority backup MX answers cleanly, so only ever
-// trying mxRecords[0] (the old behaviour) threw away a large share of real,
-// verifiable mailboxes as "unknown". Each host is still SSRF-vetted (resolved to
-// a public IP once, connected to that exact IP).
-// Returns { result, host, ip } — result.connected is true if any host replied.
-async function smtpProbeFallback(mxHosts, email, isCatchAll) {
-    let last = { code: 0, connected: false, message: 'No reachable MX host' };
+// Verify `recipients` (real address + optional random probes) in ONE SMTP
+// session, trying each MX host in priority order until one answers. Many
+// domains' PRIMARY MX greylists or silently drops connections while a backup MX
+// answers cleanly, so only ever trying mxRecords[0] threw away real mailboxes as
+// "unknown". Each host is SSRF-vetted (resolved to a public IP once, connected
+// to that exact IP). Returns { host, ip, real, probes, message } where `real` is
+// the reply for recipients[0] and `probes` are the replies for the rest.
+async function smtpMultiFallback(mxHosts, recipients) {
+    let last = null;
     for (const host of mxHosts.slice(0, MAX_MX_HOSTS)) {
         const ip = await resolvePublicMxIp(host);
-        if (!ip) { last = { code: 0, connected: false, message: 'Mail server resolves to a non-public address (blocked)' }; continue; }
-        const r = await checkSMTP(host, email, isCatchAll, ip);
-        if (r.connected) return { result: r, host, ip };
-        last = r;
+        if (!ip) { last = { host: null, ip: null, real: { code: 0, connected: false, message: 'Mail server resolves to a non-public address (blocked)' }, probes: [] }; continue; }
+        const r = await checkSMTPMulti(host, recipients, ip);
+        const real = r.results[0] || { code: 0, connected: false, message: 'No reply' };
+        const out = { host, ip, real, probes: r.results.slice(1), message: r.message };
+        if (real.connected || r.connected) return out;   // this host talked to us
+        last = out;
     }
-    return { result: last, host: null, ip: null };
+    return last || { host: null, ip: null, real: { code: 0, connected: false, message: 'No reachable MX host' }, probes: [] };
+}
+
+// Reduce a set of random-probe RCPT replies to (accepted, hardReject) for
+// catchAllVerdict(): 250 = the domain accepts an unknown mailbox, 5xx = it
+// rejects one. 4xx / no-reply is inconclusive and ignored.
+function tallyProbes(probes) {
+    let accepted = 0, hardReject = false;
+    const messages = [];
+    for (const p of probes) {
+        if (!p || !p.connected) continue;
+        if (p.code === 250) { accepted++; messages.push(p.message); }
+        else if (p.code >= 500 && p.code < 600) hardReject = true;
+    }
+    return { accepted, hardReject, messages };
 }
 
 // Build a random local-part that is extremely unlikely to be a real mailbox.
@@ -209,53 +225,25 @@ function setDeliverable(result, email, confidence, reason) {
 }
 
 // Per-DOMAIN catch-all classification, cached. Detecting catch-all by opening a
-// fresh SMTP connection for every address tripled the connection rate to each
-// mail server, which triggered greylisting/rate-limiting — so the random probes
-// came back 4xx and the old code (which treated any non-250 probe as a
-// rejection) concluded "not catch-all" for EVERY domain. That's why catch-all
-// always showed 0 and unknowns were high. Fix: classify a domain ONCE, cache it,
-// and read a probe correctly — 250 = the server accepts a random mailbox
-// (catch-all), 5xx = it hard-rejects unknown mailboxes (NOT catch-all), 4xx /
-// no-answer = inconclusive (greylisting) and is retried, never counted as a
-// rejection.
+// A domain's catch-all status is stable, so classify it ONCE and cache the
+// verdict. verifyEmail sends the real address AND the random probes in a SINGLE
+// SMTP session (see checkSMTPMulti) — once MAIL FROM + the first RCPT pass, the
+// probes in the same session get real answers, so greylisting can no longer
+// masquerade as "not catch-all". The old approach opened a fresh connection per
+// probe, which the server rate-limited into 4xx, and every domain was wrongly
+// classified "not catch-all" (catch-all always 0, unknowns high).
 const catchAllCache = new Map(); // domain -> { verdict, probeMessages, ts }
 const CATCH_ALL_TTL = 60 * 60 * 1000; // 1 hour
 
 // Decide catch-all status from the probe tally. A single accepted (250) random
 // address is strong evidence of catch-all; a single hard 5xx rejection proves
 // the server distinguishes real mailboxes (NOT catch-all). Only greylisting /
-// timeouts (nothing accepted, nothing hard-rejected) is 'unknown'. Crucially, a
-// 4xx probe is NOT a rejection — the old code treated it as one, which zeroed
-// out catch-all everywhere.
+// timeouts (nothing accepted, nothing hard-rejected) is 'unknown'. A 4xx probe
+// is NOT a rejection.
 function catchAllVerdict(accepted, hardReject) {
     if (hardReject) return 'not';
     if (accepted >= 1) return 'catchall';
     return 'unknown';
-}
-
-async function detectCatchAll(domain, mxHost, mxIp) {
-    const hit = catchAllCache.get(domain);
-    if (hit && Date.now() - hit.ts < CATCH_ALL_TTL) return hit;
-
-    let accepted = 0, hardReject = false;
-    const probeMessages = [];
-    for (let i = 0; i < CATCH_ALL_PROBES; i++) {
-        const fake = `${randomLocalPart()}@${domain}`;
-        let probe = await checkSMTP(mxHost, fake, true, mxIp);
-        // Retry a temporary (greylisting) reply before drawing any conclusion.
-        for (let r = 0; r < SMTP_MAX_RETRIES && probe.connected && probe.code >= 400 && probe.code < 500; r++) {
-            await sleep(3000 * (r + 1));
-            probe = await checkSMTP(mxHost, fake, true, mxIp);
-        }
-        if (!probe.connected) continue;                       // inconclusive
-        if (probe.code === 250) { accepted++; probeMessages.push(probe.message); }
-        else if (probe.code >= 500 && probe.code < 600) { hardReject = true; break; }
-        // 4xx after retries -> still inconclusive, ignore
-    }
-
-    const res = { verdict: catchAllVerdict(accepted, hardReject), probeMessages, ts: Date.now() };
-    catchAllCache.set(domain, res);
-    return res;
 }
 
 async function verifyEmail(email) {
@@ -336,13 +324,21 @@ async function verifyEmail(email) {
         }
     }
 
-    // 6. SMTP handshake for the real address. Try every MX host (priority order)
-    // until one answers — each is SSRF-vetted and connected to by its public IP.
-    let { result: smtpResult, host: liveMx, ip: mxIp } = await smtpProbeFallback(result.mxRecords, email, false);
-    result.smtpConnected = smtpResult.connected;
-    result.smtpCode = smtpResult.code;
+    // 6. SMTP verification in a SINGLE session: the real address, plus (unless
+    // this domain's catch-all status is already cached) a couple of random
+    // probes — so catch-all is settled from the SAME greylisting-passed session
+    // as the real RCPT, not from separate connections the server rate-limits.
+    // MX hosts are tried in priority order; each is SSRF-vetted (public IP only).
+    const cached = catchAllCache.get(domain);
+    const haveCatchAll = cached && Date.now() - cached.ts < CATCH_ALL_TTL && cached.verdict !== 'unknown';
+    const fakes = haveCatchAll ? [] : Array.from({ length: CATCH_ALL_PROBES }, () => `${randomLocalPart()}@${domain}`);
 
-    if (!smtpResult.connected) {
+    let sess = await smtpMultiFallback(result.mxRecords, [email, ...fakes]);
+    let real = sess.real;
+    result.smtpConnected = real.connected;
+    result.smtpCode = real.code;
+
+    if (!real.connected) {
         // No MX host answered (commonly: outbound port 25 is blocked). Fall back
         // to any provider-level signal we already gathered.
         if (m365 && m365.exists === true) {
@@ -350,117 +346,106 @@ async function verifyEmail(email) {
         } else {
             result.status = 'unknown';
             result.confidence = 15;
-            result.reason = 'Failed to connect to SMTP server: ' + smtpResult.message;
+            result.reason = 'Failed to connect to SMTP server: ' + (real.message || sess.message || 'no reply');
         }
         return result;
     }
 
-    // Read the human-readable part of a non-250 reply to separate an over-quota
-    // mailbox / disabled account / spam trap (mailbox effectively exists) from a
-    // plain "no such user" rejection.
-    const smtpClass = smtpResult.code !== 250 ? classifySmtpMessage(smtpResult.message) : null;
+    // Over-quota / disabled / spam-trap hints in a non-250 reply (mailbox exists).
+    const smtpClass = real.code !== 250 ? classifySmtpMessage(real.message) : null;
     if (smtpClass === 'spamtrap') {
-        result.status = 'spamtrap';
-        result.confidence = 85;
-        result.reason = 'Address flagged as a spam trap. Do not send';
-        return result;
+        result.status = 'spamtrap'; result.confidence = 85;
+        result.reason = 'Address flagged as a spam trap. Do not send'; return result;
     }
     if (smtpClass === 'inbox_full') {
-        result.status = 'inbox_full';
-        result.confidence = 70;
-        result.reason = `Mailbox exists but is full / over quota (SMTP ${smtpResult.code})`;
-        return result;
+        result.status = 'inbox_full'; result.confidence = 70;
+        result.reason = `Mailbox exists but is full / over quota (SMTP ${real.code})`; return result;
     }
     if (smtpClass === 'disabled') {
-        result.status = 'disabled';
-        result.confidence = 80;
-        result.reason = `Mailbox exists but has been disabled / suspended (SMTP ${smtpResult.code})`;
-        return result;
+        result.status = 'disabled'; result.confidence = 80;
+        result.reason = `Mailbox exists but has been disabled / suspended (SMTP ${real.code})`; return result;
     }
 
-    // Hard rejection -> mailbox does not exist
-    if (smtpResult.code >= 500 && smtpResult.code < 600) {
-        result.status = 'invalid';
-        result.confidence = 85;
-        result.reason = `Mailbox does not exist (SMTP ${smtpResult.code})`;
-        return result;
+    // Hard rejection -> mailbox does not exist.
+    if (real.code >= 500 && real.code < 600) {
+        result.status = 'invalid'; result.confidence = 85;
+        result.reason = `Mailbox does not exist (SMTP ${real.code})`; return result;
     }
 
-    // Temporary failure / greylisting -> wait and retry (with backoff) on the
-    // SAME host that answered. Greylisting deliberately defers the first attempt,
-    // so retrying recovers many mailboxes that would otherwise be 'unknown'.
-    if (smtpResult.code >= 400 && smtpResult.code < 500) {
-        for (let attempt = 1; attempt <= SMTP_MAX_RETRIES; attempt++) {
+    // Temporary failure / greylisting -> retry the whole session (real + probes)
+    // on the same host, with backoff.
+    if (real.code >= 400 && real.code < 500) {
+        for (let attempt = 1; attempt <= SMTP_MAX_RETRIES && sess.host; attempt++) {
             await sleep(3000 * attempt);
-            const retry = await checkSMTP(liveMx, email, false, mxIp);
-            result.smtpCode = retry.code;
-            if (!retry.connected) break;                    // lost the host — stop retrying
-            if (retry.code >= 500 && retry.code < 600) {
-                result.status = 'invalid';
-                result.confidence = 80;
-                result.reason = `Mailbox does not exist (SMTP ${retry.code})`;
-                return result;
+            const r = await checkSMTPMulti(sess.host, [email, ...fakes], sess.ip);
+            real = r.results[0] || real;
+            sess = { ...sess, real, probes: r.results.slice(1) };
+            result.smtpCode = real.code;
+            if (!real.connected) break;                       // lost the host
+            if (real.code >= 500 && real.code < 600) {
+                result.status = 'invalid'; result.confidence = 80;
+                result.reason = `Mailbox does not exist (SMTP ${real.code})`; return result;
             }
-            smtpResult = retry;
-            if (retry.code === 250) break;                  // accepted -> continue as a 250
+            if (real.code === 250) break;                     // accepted -> continue
         }
-        if (smtpResult.code !== 250) {
-            result.status = 'unknown';
-            result.confidence = 30;
-            result.reason = `Temporary failure / greylisting (SMTP ${smtpResult.code})`;
-            return result;
+        if (real.code !== 250) {
+            result.status = 'unknown'; result.confidence = 30;
+            result.reason = `Temporary failure / greylisting (SMTP ${real.code})`; return result;
         }
     }
 
-    if (smtpResult.code === 250) {
-        // 7. Catch-all detection — classified once per domain (cached) on the
-        // same host that accepted the real address.
-        const ca = await detectCatchAll(domain, liveMx, mxIp);
+    if (real.code === 250) {
+        // 7. Catch-all — from THIS session's probes, or the per-domain cache.
+        let verdict, probeMessages;
+        if (haveCatchAll) {
+            verdict = cached.verdict; probeMessages = cached.probeMessages || [];
+        } else {
+            const t = tallyProbes(sess.probes);
+            verdict = catchAllVerdict(t.accepted, t.hardReject);
+            probeMessages = t.messages;
+            // Cache only a confident verdict; never pin an inconclusive 'unknown'.
+            if (verdict !== 'unknown') catchAllCache.set(domain, { verdict, probeMessages, ts: Date.now() });
+        }
 
-        if (ca.verdict === 'not') {
-            // A random address is hard-rejected -> not catch-all -> the real
-            // address being accepted means the mailbox genuinely exists.
+        if (verdict === 'not') {
+            // A random address is hard-rejected -> not catch-all -> the accepted
+            // real address is a genuine mailbox.
             setDeliverable(result, email, (m365 && m365.exists === true) ? 92 : 85, 'Mailbox exists');
             return result;
         }
 
-        if (ca.verdict === 'unknown') {
-            // The server accepted the real address but rate-limited/greylisted the
-            // catch-all probes, so we could neither confirm nor rule out catch-all.
+        if (verdict === 'unknown') {
+            // Real address accepted, but probes were greylisted/inconclusive.
             if (m365 && m365.exists === true) {
                 setDeliverable(result, email, 82, 'Microsoft 365 confirms the mailbox exists');
             } else {
-                result.status = 'unknown';
-                result.confidence = 35;
-                result.reason = 'Server accepted the address but rate-limited catch-all probes (could not confirm)';
+                result.status = 'unknown'; result.confidence = 35;
+                result.reason = 'Server accepted the address but could not confirm catch-all status';
             }
             return result;
         }
 
-        // ca.verdict === 'catchall' -> a random address was accepted.
+        // verdict === 'catchall' -> the server accepted a random address too.
         result.isCatchAll = true;
-        const realNorm = normalizeMessage(smtpResult.message);
-        const serverDistinguishes = ca.probeMessages.length > 0
-            && ca.probeMessages.every(m => normalizeMessage(m) !== realNorm);
+        const realNorm = normalizeMessage(real.message);
+        const serverDistinguishes = probeMessages.length > 0
+            && probeMessages.every(m => normalizeMessage(m) !== realNorm);
 
         if (m365 && m365.exists === true) {
             setDeliverable(result, email, 82, 'Catch-all domain, but Microsoft 365 confirms the mailbox exists');
         } else if (serverDistinguishes) {
-            result.status = 'catch-all';
-            result.confidence = 60;
+            result.status = 'catch-all'; result.confidence = 60;
             result.reason = 'Catch-all domain, but the server replies differently for this address (likely real)';
         } else {
-            result.status = 'catch-all';
-            result.confidence = 40;
+            result.status = 'catch-all'; result.confidence = 40;
             result.reason = 'Domain accepts all emails (catch-all); deliverability uncertain';
         }
         return result;
     }
 
     // Anything else
-    result.status = 'unknown';
-    result.confidence = 20;
-    result.reason = `Unexpected SMTP response: ${smtpResult.code} ${smtpResult.message}`;
+    result.status = 'unknown'; result.confidence = 20;
+    result.reason = `Unexpected SMTP response: ${real.code} ${real.message}`;
     return result;
 }
 
