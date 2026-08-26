@@ -208,6 +208,56 @@ function setDeliverable(result, email, confidence, reason) {
     result.reason = reason;
 }
 
+// Per-DOMAIN catch-all classification, cached. Detecting catch-all by opening a
+// fresh SMTP connection for every address tripled the connection rate to each
+// mail server, which triggered greylisting/rate-limiting — so the random probes
+// came back 4xx and the old code (which treated any non-250 probe as a
+// rejection) concluded "not catch-all" for EVERY domain. That's why catch-all
+// always showed 0 and unknowns were high. Fix: classify a domain ONCE, cache it,
+// and read a probe correctly — 250 = the server accepts a random mailbox
+// (catch-all), 5xx = it hard-rejects unknown mailboxes (NOT catch-all), 4xx /
+// no-answer = inconclusive (greylisting) and is retried, never counted as a
+// rejection.
+const catchAllCache = new Map(); // domain -> { verdict, probeMessages, ts }
+const CATCH_ALL_TTL = 60 * 60 * 1000; // 1 hour
+
+// Decide catch-all status from the probe tally. A single accepted (250) random
+// address is strong evidence of catch-all; a single hard 5xx rejection proves
+// the server distinguishes real mailboxes (NOT catch-all). Only greylisting /
+// timeouts (nothing accepted, nothing hard-rejected) is 'unknown'. Crucially, a
+// 4xx probe is NOT a rejection — the old code treated it as one, which zeroed
+// out catch-all everywhere.
+function catchAllVerdict(accepted, hardReject) {
+    if (hardReject) return 'not';
+    if (accepted >= 1) return 'catchall';
+    return 'unknown';
+}
+
+async function detectCatchAll(domain, mxHost, mxIp) {
+    const hit = catchAllCache.get(domain);
+    if (hit && Date.now() - hit.ts < CATCH_ALL_TTL) return hit;
+
+    let accepted = 0, hardReject = false;
+    const probeMessages = [];
+    for (let i = 0; i < CATCH_ALL_PROBES; i++) {
+        const fake = `${randomLocalPart()}@${domain}`;
+        let probe = await checkSMTP(mxHost, fake, true, mxIp);
+        // Retry a temporary (greylisting) reply before drawing any conclusion.
+        for (let r = 0; r < SMTP_MAX_RETRIES && probe.connected && probe.code >= 400 && probe.code < 500; r++) {
+            await sleep(3000 * (r + 1));
+            probe = await checkSMTP(mxHost, fake, true, mxIp);
+        }
+        if (!probe.connected) continue;                       // inconclusive
+        if (probe.code === 250) { accepted++; probeMessages.push(probe.message); }
+        else if (probe.code >= 500 && probe.code < 600) { hardReject = true; break; }
+        // 4xx after retries -> still inconclusive, ignore
+    }
+
+    const res = { verdict: catchAllVerdict(accepted, hardReject), probeMessages, ts: Date.now() };
+    catchAllCache.set(domain, res);
+    return res;
+}
+
 async function verifyEmail(email) {
     const result = {
         email,
@@ -363,32 +413,35 @@ async function verifyEmail(email) {
     }
 
     if (smtpResult.code === 250) {
-        // 7. Catch-all detection with multiple random probes.
-        let acceptedProbes = 0;
-        const probeMessages = [];
-        for (let i = 0; i < CATCH_ALL_PROBES; i++) {
-            const fake = `${randomLocalPart()}@${domain}`;
-            // Probe the SAME host that accepted the real address, so the
-            // comparison is apples-to-apples.
-            const probe = await checkSMTP(liveMx, fake, true, mxIp);
-            if (probe.code === 250) {
-                acceptedProbes++;
-                probeMessages.push(probe.message);
-            }
-        }
+        // 7. Catch-all detection — classified once per domain (cached) on the
+        // same host that accepted the real address.
+        const ca = await detectCatchAll(domain, liveMx, mxIp);
 
-        if (acceptedProbes < CATCH_ALL_PROBES) {
-            // At least one random address was rejected -> not catch-all -> the
-            // real address being accepted means the mailbox exists.
+        if (ca.verdict === 'not') {
+            // A random address is hard-rejected -> not catch-all -> the real
+            // address being accepted means the mailbox genuinely exists.
             setDeliverable(result, email, (m365 && m365.exists === true) ? 92 : 85, 'Mailbox exists');
             return result;
         }
 
-        // Every random probe was accepted -> catch-all domain.
+        if (ca.verdict === 'unknown') {
+            // The server accepted the real address but rate-limited/greylisted the
+            // catch-all probes, so we could neither confirm nor rule out catch-all.
+            if (m365 && m365.exists === true) {
+                setDeliverable(result, email, 82, 'Microsoft 365 confirms the mailbox exists');
+            } else {
+                result.status = 'unknown';
+                result.confidence = 35;
+                result.reason = 'Server accepted the address but rate-limited catch-all probes (could not confirm)';
+            }
+            return result;
+        }
+
+        // ca.verdict === 'catchall' -> a random address was accepted.
         result.isCatchAll = true;
         const realNorm = normalizeMessage(smtpResult.message);
-        const serverDistinguishes = probeMessages.length > 0
-            && probeMessages.every(m => normalizeMessage(m) !== realNorm);
+        const serverDistinguishes = ca.probeMessages.length > 0
+            && ca.probeMessages.every(m => normalizeMessage(m) !== realNorm);
 
         if (m365 && m365.exists === true) {
             setDeliverable(result, email, 82, 'Catch-all domain, but Microsoft 365 confirms the mailbox exists');
@@ -481,4 +534,4 @@ async function verifyCatchAll(email) {
     return { ...r, status: 'not_catch_all', reason: 'Not a catch-all domain. Use standard verification' };
 }
 
-module.exports = { verifyEmail, quickVerify, verifyCatchAll, statusBucket, isRoleAddress, classifySmtpMessage, STATUSES };
+module.exports = { verifyEmail, quickVerify, verifyCatchAll, statusBucket, isRoleAddress, classifySmtpMessage, catchAllVerdict, STATUSES };

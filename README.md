@@ -151,7 +151,11 @@ out every verdict:
 - **Greylisting retries** — temporary `4xx` replies are retried with backoff
   (`SMTP_RETRIES`, default 2) on the host that answered.
 - **Catch-all resolution** — random-probe detection (`CATCH_ALL_PROBES`),
-  reply-differencing, and the Microsoft 365 mailbox API.
+  reply-differencing, and the Microsoft 365 mailbox API. Catch-all is classified
+  **once per domain and cached**, so a list with repeated domains opens far fewer
+  connections (less greylisting). A probe that returns 250 means the domain
+  accepts unknown mailboxes (catch-all); a hard 5xx means it does not; a 4xx is
+  greylisting and is retried, never mistaken for a rejection.
 
 If catch-all always shows **0** and accuracy is low (e.g. 150/500 where another
 tool gets 300+), the cause is almost always **port 25 blocked** — every SMTP
