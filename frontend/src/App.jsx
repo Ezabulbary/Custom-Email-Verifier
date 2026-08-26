@@ -222,7 +222,7 @@ const STATUS_META = {
   disabled:   { label: 'Disabled',   icon: 'bad',  color: '#dc2626' },
   spamtrap:   { label: 'Spamtrap',   icon: 'bad',  color: '#b91c1c' },
   invalid:    { label: 'Invalid',    icon: 'bad',  color: '#dc2626' },
-  not_catch_all: { label: 'Not catch-all', icon: 'unk', color: '#64748b' },
+  not_catch_all: { label: 'Good', icon: 'ok', color: '#059669' },
   unknown:    { label: 'Unknown',    icon: 'unk',  color: '#64748b' },
 };
 const statusMeta = (status) => STATUS_META[status] || STATUS_META.unknown;
@@ -328,6 +328,37 @@ const formatDate = (iso) => {
   return isNaN(d) ? iso : d.toLocaleString();
 };
 
+// Per-type batch breakdown. Each tool reports what IT actually measures:
+//   single/bulk/csv -> Valid / Invalid / Catch-all / Unknown
+//   catchall        -> Resolved / Still risky / Undeliverable / Good
+//   bounce          -> just the estimated bounce rate
+const BatchBreakdown = ({ b }) => {
+  const c = b.counts || {};
+  if (b.type === 'bounce') {
+    const pct = b.total ? Math.round(((c.invalid || 0) / b.total) * 100) : 0;
+    const cls = pct <= 3 ? 'valid' : pct <= 10 ? 'catch-all' : 'invalid';
+    return <div className="pill-row"><span className={`count-pill ${cls}`}>Est. bounce: <strong>{pct}%</strong></span></div>;
+  }
+  if (b.type === 'catchall') {
+    return (
+      <div className="pill-row">
+        <CountPill label="Resolved" value={c.valid ?? 0} cls="valid" />
+        <CountPill label="Still risky" value={c.catchAll ?? 0} cls="catch-all" />
+        <CountPill label="Undeliverable" value={c.invalid ?? 0} cls="invalid" />
+        <CountPill label="Good" value={c.notCatchAll ?? 0} cls="valid" />
+      </div>
+    );
+  }
+  return (
+    <div className="pill-row">
+      <CountPill label="Valid" value={c.valid ?? 0} cls="valid" />
+      <CountPill label="Invalid" value={c.invalid ?? 0} cls="invalid" />
+      <CountPill label="Catch-all" value={c.catchAll ?? 0} cls="catch-all" />
+      <CountPill label="Unknown" value={c.unknown ?? 0} cls="unknown" />
+    </div>
+  );
+};
+
 const CountPill = ({ label, value, cls }) => (
   <span className={`count-pill ${cls}`}>{label}: <strong>{value}</strong></span>
 );
@@ -415,14 +446,7 @@ const HistoryPanel = ({ type, version }) => {
                   <td><strong>#{h.batchNumber ?? h.id}</strong> <span style={{color:'var(--text-secondary)'}}>{h.name || ''}</span></td>
                   <td>{formatDate(h.createdAt)}</td>
                   <td><strong>{h.total}</strong></td>
-                  <td>
-                    <div className="pill-row">
-                      <CountPill label="Valid" value={h.counts.valid} cls="valid" />
-                      <CountPill label="Invalid" value={h.counts.invalid} cls="invalid" />
-                      <CountPill label="Catch-all" value={h.counts.catchAll} cls="catch-all" />
-                      <CountPill label="Unknown" value={h.counts.unknown} cls="unknown" />
-                    </div>
-                  </td>
+                  <td><BatchBreakdown b={h} /></td>
                   <td style={{textAlign:'right'}}>
                     {h.total > 0 && (
                       <button className="btn-secondary" title="Download CSV"
@@ -1292,9 +1316,10 @@ const DashboardLayout = ({ children }) => {
           <Link to="/dashboard/verify" className={`nav-item ${location.pathname==='/dashboard/verify'?'active':''}`}><CheckCircle size={18}/> Email Verification</Link>
           <Link to="/dashboard/catchall" className={`nav-item ${location.pathname==='/dashboard/catchall'?'active':''}`}><MailCheck size={18}/> Catch-All Verifier</Link>
           <Link to="/dashboard/bounce" className={`nav-item ${location.pathname==='/dashboard/bounce'?'active':''}`}><AlertCircle size={18}/> Bounce Rate</Link>
+          {/* Tasks & Results sits directly under the three tools, since it holds their combined output. */}
+          <Link to="/dashboard/tasks" className={`nav-item ${location.pathname==='/dashboard/tasks'?'active':''}`}><History size={18}/> Tasks &amp; Results</Link>
           <Link to="/dashboard/billing" className={`nav-item ${location.pathname==='/dashboard/billing'?'active':''}`}><Plus size={18}/> Buy Credits</Link>
           <Link to="/dashboard/api" className={`nav-item ${location.pathname==='/dashboard/api'?'active':''}`}><Code size={18}/> API</Link>
-          <Link to="/dashboard/tasks" className={`nav-item ${location.pathname==='/dashboard/tasks'?'active':''}`}><History size={18}/> Tasks &amp; Results</Link>
           <Link to="/dashboard/account" className={`nav-item ${location.pathname==='/dashboard/account'?'active':''}`}><User size={18}/> My Account</Link>
           {(user?.role === 'admin' || user?.role === 'superadmin') && (
             <Link to="/admin" className={`nav-item ${location.pathname==='/admin'?'active':''}`}><ShieldCheck size={18}/> Admin Panel</Link>
@@ -1535,6 +1560,7 @@ const VerificationGuide = () => (
 
 const EmailVerification = () => {
   const { refreshUser } = useAuth();
+  const navigate = useNavigate();
   const [historyVersion, setHistoryVersion] = useState(0);
   const [results, setResults] = useState([]);
   const [resultsTitle, setResultsTitle] = useState('Results');
@@ -1679,6 +1705,27 @@ const EmailVerification = () => {
       )}
 
       {progress && <JobProgress processed={progress.processed} total={progress.total} />}
+      {/* Handoff: catch-all results are the Catch-All Verifier's job — send
+          them over in one click (prefills its paste box). */}
+      {(() => {
+        const caEmails = results.filter(r => r.status === 'catch-all').map(r => r.email);
+        if (!caEmails.length) return null;
+        return (
+          <div className="handoff-bar card">
+            <div className="handoff-text">
+              <AlertCircle size={18} color="#d97706" />
+              <span><strong>{caEmails.length}</strong> address{caEmails.length > 1 ? 'es' : ''} came back <strong>catch-all</strong>. The Catch-All Verifier can deep-resolve them.</span>
+            </div>
+            <button className="btn-primary" onClick={() => {
+              try { sessionStorage.setItem('bc_catchall_handoff', JSON.stringify(caEmails)); } catch { /* storage unavailable */ }
+              navigate('/dashboard/catchall');
+            }}>
+              <MailCheck size={16} /> Send to Catch-All Verifier
+            </button>
+          </div>
+        );
+      })()}
+
       {results.length > 0 && <ResultsTable results={results} title={resultsTitle} />}
 
       {/* This page's own history (single + bulk + csv). Everything, including
@@ -1698,7 +1745,6 @@ const BounceChecker = () => {
   const [progress, setProgress] = useState(null);
   const [results, setResults] = useState(null);
   const [showMap, setShowMap] = useState(false);
-  const [mode, setMode] = useState('fast');
   const [historyVersion, setHistoryVersion] = useState(0);
   const fileInputRef = useRef(null);
 
@@ -1708,7 +1754,6 @@ const BounceChecker = () => {
     if (!file) return;
     const fd = new FormData();
     fd.append('file', file);
-    fd.append('mode', mode);
     if (opts) {
       fd.append('emailCol', String(opts.emailCol));
       fd.append('hasHeader', opts.hasHeader);
@@ -1761,28 +1806,12 @@ const BounceChecker = () => {
   return (
     <div>
       <p className="muted" style={{ marginTop: '0', marginBottom: '1.5rem' }}>
-        Upload any list (CSV or TXT) for a <strong>free</strong> bounce-rate analysis. No credits used.
-        Pick <strong>Fast</strong> for a near-instant estimate, or <strong>Accurate</strong> for a real mailbox-level SMTP check.
+        Upload any list (CSV or TXT) for a <strong>free</strong>, instant bounce-rate estimate. No credits used.
+        It checks syntax, mail servers, disposable domains and duplicates without contacting each mailbox;
+        for mailbox-level verdicts use <Link to="/dashboard/verify">Email Verification</Link>.
       </p>
 
       <div className="card ba-upload">
-        <div className="ba-mode">
-          <button
-            type="button"
-            className={`ba-mode-opt ${mode === 'fast' ? 'active' : ''}`}
-            onClick={() => setMode('fast')}
-          >
-            <Zap size={16} /> <span><strong>Fast estimate</strong><em>Syntax + mail-server + disposable · instant</em></span>
-          </button>
-          <button
-            type="button"
-            className={`ba-mode-opt ${mode === 'accurate' ? 'active' : ''}`}
-            onClick={() => setMode('accurate')}
-          >
-            <ShieldCheck size={16} /> <span><strong>Accurate</strong><em>Full SMTP mailbox check · slower</em></span>
-          </button>
-        </div>
-
         <div
           className="upload-area"
           onClick={() => fileInputRef.current.click()}
@@ -1840,7 +1869,7 @@ const BounceChecker = () => {
           </div>
 
           <div className="ba-result-actions">
-            <span className="muted-inline">{mode === 'accurate' ? 'Accurate mode · real SMTP mailbox check' : 'Fast mode · domain-level estimate'}</span>
+            <span className="muted-inline">Instant domain-level estimate · for mailbox verdicts use Email Verification</span>
             <button className="btn-secondary" onClick={() => downloadCSV(results, 'bounce_check.csv')}>
               <Download size={15} /> Download full results
             </button>
@@ -1874,7 +1903,20 @@ const CatchAllVerifier = () => {
   const [email, setEmail] = useState('');
   const [singleLoading, setSingleLoading] = useState(false);
 
-  const [bulkText, setBulkText] = useState('');
+  // Prefill the paste box when Email Verification handed off its catch-all
+  // results ("Send to Catch-All Verifier"). Lazy initializer: read-and-clear
+  // the handoff exactly once, on first mount.
+  const [bulkText, setBulkText] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem('bc_catchall_handoff');
+      if (raw) {
+        sessionStorage.removeItem('bc_catchall_handoff');
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr) && arr.length) return arr.join('\n');
+      }
+    } catch { /* storage unavailable */ }
+    return '';
+  });
   const [bulkLoading, setBulkLoading] = useState(false);
 
   const [file, setFile] = useState(null);
@@ -1944,7 +1986,7 @@ const CatchAllVerifier = () => {
       <p className="muted" style={{ marginTop: 0, marginBottom: '1.5rem' }}>
         Catch-all domains accept every address, so standard SMTP can't tell a real mailbox from a fake one.
         This tool deep-resolves them using Microsoft&nbsp;365 signals and SMTP reply-differencing, so a catch-all can come back
-        <strong> deliverable</strong> instead of just “risky”. Addresses that aren't catch-all are flagged so you verify them normally.
+        <strong> deliverable</strong> instead of just “risky”. Addresses that aren't catch-all come back as <strong>Good</strong> (no charge).
       </p>
 
       <div className="card verify-single-card">
@@ -1995,10 +2037,10 @@ const CatchAllVerifier = () => {
       {summary && (
         <div className="card ca-summary">
           <div className="ca-tiles">
-            <div className="ca-tile"><div className="ca-num" style={{ color: '#059669' }}>{summary.deliverable.toLocaleString()}</div><div className="ca-lbl">Deliverable</div></div>
-            <div className="ca-tile"><div className="ca-num" style={{ color: '#d97706' }}>{summary.catchall.toLocaleString()}</div><div className="ca-lbl">Still catch-all</div></div>
+            <div className="ca-tile"><div className="ca-num" style={{ color: '#059669' }}>{summary.deliverable.toLocaleString()}</div><div className="ca-lbl">Resolved</div></div>
+            <div className="ca-tile"><div className="ca-num" style={{ color: '#d97706' }}>{summary.catchall.toLocaleString()}</div><div className="ca-lbl">Still risky</div></div>
             <div className="ca-tile"><div className="ca-num" style={{ color: '#dc2626' }}>{summary.undeliverable.toLocaleString()}</div><div className="ca-lbl">Undeliverable</div></div>
-            <div className="ca-tile"><div className="ca-num" style={{ color: '#64748b' }}>{summary.notCatchAll.toLocaleString()}</div><div className="ca-lbl">Not catch-all</div></div>
+            <div className="ca-tile"><div className="ca-num" style={{ color: '#059669' }}>{summary.notCatchAll.toLocaleString()}</div><div className="ca-lbl">Good</div></div>
             <div className="ca-tile"><div className="ca-num">{summary.total.toLocaleString()}</div><div className="ca-lbl">Total</div></div>
           </div>
         </div>
@@ -2945,14 +2987,7 @@ const TasksResults = () => {
                       <td><span className={`badge type-${b.type}`}>{TYPE_LABELS[b.type] || b.type}</span></td>
                       <td><span className="badge valid">Completed</span></td>
                       <td><strong>{b.total}</strong></td>
-                      <td>
-                        <div className="pill-row">
-                          <CountPill label="Valid" value={b.counts.valid} cls="valid" />
-                          <CountPill label="Invalid" value={b.counts.invalid} cls="invalid" />
-                          <CountPill label="Catch-all" value={b.counts.catchAll} cls="catch-all" />
-                          <CountPill label="Unknown" value={b.counts.unknown} cls="unknown" />
-                        </div>
-                      </td>
+                      <td><BatchBreakdown b={b} /></td>
                       <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
                         <div style={{display:'inline-flex', gap:'0.4rem', alignItems:'center'}}>
                           {b.total > 0 && (

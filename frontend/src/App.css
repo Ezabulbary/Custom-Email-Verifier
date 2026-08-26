@@ -384,7 +384,7 @@
 .badge.disposable { background: #fee2e2; color: #dc2626; }
 .badge.disabled { background: #fde2e2; color: #b91c1c; }
 .badge.spamtrap { background: #fecaca; color: #991b1b; }
-.badge.not_catch_all { background: #f1f5f9; color: #64748b; }
+.badge.not_catch_all { background: #d1fae5; color: #059669; }
 .badge.unknown { background: #f1f5f9; color: #64748b; }
 /* Role badges */
 .badge.role-superadmin { background: #ede9fe; color: #6d28d9; }
@@ -1076,6 +1076,11 @@
   .vguide-why { grid-template-columns: 1fr; }
   .vguide-hero { flex-direction: column; }
 }
+
+/* --- Email Verification -> Catch-All handoff bar --- */
+.handoff-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding: 1rem 1.25rem; margin-top: 1.5rem; border-color: #fde68a; background: #fffbeb; }
+.handoff-text { display: flex; align-items: center; gap: 0.6rem; color: var(--text-primary); }
+.handoff-bar .btn-primary { white-space: nowrap; }
 
 /* --- Catch-All Verifier summary tiles --- */
 .ca-summary { padding: 1.25rem; margin-top: 1.5rem; }

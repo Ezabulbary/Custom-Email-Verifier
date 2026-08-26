@@ -962,17 +962,14 @@ app.post('/verify/csv', authenticateToken, upload.single('file'), async (req, re
 });
 
 // --- Bounce Rate check (FREE) ---
-// Two modes, both free (charge:false):
-//   • 'fast'     (default) - quickVerify: syntax + disposable + MX only, no SMTP.
-//                 Near-instant, like NeverBounce's free list analysis. Good for a
-//                 quick, domain-level bounce ESTIMATE.
-//   • 'accurate' - verifyEmail: full syntax + disposable + MX + SMTP + catch-all,
-//                 so it reflects real mailbox-level deliverability (slower; needs
-//                 outbound port 25).
+// A fast, free LIST ANALYZER, not a verifier: syntax + disposable + MX only,
+// no SMTP, so it returns near-instantly and never uses credits. It answers
+// "how healthy is this list?" BEFORE any credits are spent; mailbox-level
+// verdicts are Email Verification's (paid) job. The old 'accurate' mode was
+// removed - it duplicated Email Verification for free.
 app.post('/bounce/csv', authenticateToken, upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'A file is required' });
     const name = (req.body.name || '').toString().slice(0, 120) || null;
-    const mode = req.body.mode === 'accurate' ? 'accurate' : 'fast';
 
     let parsed = { emails: [], sources: [] };
     try {
@@ -989,9 +986,7 @@ app.post('/bounce/csv', authenticateToken, upload.single('file'), async (req, re
     try {
         await startVerificationJob(req, res, {
             type: 'bounce', emails: parsed.emails, name, sources: parsed.sources,
-            verifyFn: mode === 'accurate' ? verifyEmail : quickVerify,
-            charge: false,
-            concurrency: mode === 'accurate' ? undefined : QUICK_CONCURRENCY,
+            verifyFn: quickVerify, charge: false, concurrency: QUICK_CONCURRENCY,
         });
     } catch (err) {
         console.error('Bounce check error:', err.message);

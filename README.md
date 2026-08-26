@@ -16,8 +16,9 @@ optional Google sign-in and TOTP two-factor authentication, credit-based billing
   column-mapping popup (pick the email column, header yes/no, remove duplicates).
 - **Catch-All Verifier** — a dedicated tool that deep-resolves addresses on
   catch-all domains (the case ordinary verifiers mark "risky").
-- **Bounce Rate** — free list analysis with two modes: *Fast estimate*
-  (syntax + MX + disposable, near-instant) or *Accurate* (full SMTP mailbox check).
+- **Bounce Rate** — free, instant list analyzer (syntax + MX + disposable +
+  duplicates; no SMTP, no credits). It estimates list health BEFORE you spend
+  credits; mailbox-level verdicts are Email Verification's job.
 - **Buy Credits** — pricing-page-matched packs, paid by card (Stripe, instant,
   automatic crediting), Wise, or international bank transfer.
 - **Tasks & Results** — 30-day execution history with full result export (CSV

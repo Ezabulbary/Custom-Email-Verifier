@@ -27,17 +27,20 @@ const FIRESTORE_MAX_DOC_BYTES = 900 * 1024; // stay safely under Firestore's 1 M
 // every invalid address (disposable ones included); `disposable` is tracked
 // separately so the dashboard can show it as its own slice.
 function summarize(results) {
-    const s = { total: results.length, valid: 0, invalid: 0, catchAll: 0, unknown: 0, disposable: 0 };
+    const s = { total: results.length, valid: 0, invalid: 0, catchAll: 0, unknown: 0, disposable: 0, notCatchAll: 0 };
     for (const r of results) {
         if (r && r.disposable) s.disposable++;
-        // statusBucket maps the fine-grained statuses (safe, role, inbox_full,
-        // disabled, spamtrap, …) onto the four rollup buckets used here.
-        s[statusBucket(r && r.status)]++;
+        // 'not_catch_all' (Catch-All Verifier: a good mailbox on a normal
+        // domain) gets its own bucket so it can be shown as "Good" instead of
+        // being lumped into "unknown". Everything else goes through
+        // statusBucket (safe/role -> valid, catch-all -> catchAll, …).
+        if (r && r.status === 'not_catch_all') s.notCatchAll++;
+        else s[statusBucket(r && r.status)]++;
     }
     return s;
 }
 
-const countsFrom = (s) => ({ valid: s.valid, invalid: s.invalid, catchAll: s.catchAll, unknown: s.unknown, disposable: s.disposable });
+const countsFrom = (s) => ({ valid: s.valid, invalid: s.invalid, catchAll: s.catchAll, unknown: s.unknown, disposable: s.disposable, notCatchAll: s.notCatchAll });
 
 // Editable profile fields, as camelCase (frontend/API) ↔ snake_case (SQLite).
 const PROFILE_FIELDS = [
@@ -123,7 +126,7 @@ function firestoreStore() {
             name: d.name ?? null,
             type: d.type,
             total: d.total || 0,
-            counts: { valid: d.valid || 0, invalid: d.invalid || 0, catchAll: d.catchAll || 0, unknown: d.unknown || 0, disposable: d.disposable || 0 },
+            counts: { valid: d.valid || 0, invalid: d.invalid || 0, catchAll: d.catchAll || 0, unknown: d.unknown || 0, disposable: d.disposable || 0, notCatchAll: d.notCatchAll || 0 },
             createdAt: toIso(d.createdAt),
         };
         if (withResults) {
@@ -408,6 +411,7 @@ function firestoreStore() {
                     batchNumber: seq, name: name || null, type,
                     total: s.total, valid: s.valid, invalid: s.invalid,
                     catchAll: s.catchAll, unknown: s.unknown, disposable: s.disposable,
+                    notCatchAll: s.notCatchAll,
                     results: stored,
                     createdAt: serverTimestamp(),
                 });

@@ -531,7 +531,7 @@ async function verifyCatchAll(email) {
 
     // Otherwise it's a normal (non-catch-all) mailbox that resolved cleanly -
     // out of scope for this tool.
-    return { ...r, status: 'not_catch_all', reason: 'Not a catch-all domain. Use standard verification' };
+    return { ...r, status: 'not_catch_all', reason: 'Good mailbox on a normal (non-catch-all) domain' };
 }
 
 module.exports = { verifyEmail, quickVerify, verifyCatchAll, statusBucket, isRoleAddress, classifySmtpMessage, catchAllVerdict, STATUSES };
