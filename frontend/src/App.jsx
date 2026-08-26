@@ -1446,19 +1446,6 @@ const DashboardLayout = ({ children }) => {
 // list-upload mappers (Reoon etc.), built for this app's own flow.
 // ---------------------------------------------------------------------------
 const EMAIL_RE_C = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const FIELD_OPTIONS = ['Custom', 'Email', 'First Name', 'Last Name', 'Full Name', 'Company', 'Title', 'Phone'];
-
-function guessField(header) {
-  const h = String(header || '').toLowerCase();
-  if (/e-?mail/.test(h)) return 'Email';
-  if (/(first.?name|fname|given)/.test(h)) return 'First Name';
-  if (/(last.?name|lname|surname|family)/.test(h)) return 'Last Name';
-  if (/(full.?name|^name$)/.test(h)) return 'Full Name';
-  if (/(company|organi[sz]ation|employer|account)/.test(h)) return 'Company';
-  if (/(title|position|role|job)/.test(h)) return 'Title';
-  if (/(phone|mobile|tel)/.test(h)) return 'Phone';
-  return 'Custom';
-}
 
 // Small client-side CSV/TSV reader for the PREVIEW only (the server re-parses
 // the real file). Handles quoted fields, escaped quotes, and , ; \t delimiters.
@@ -1488,7 +1475,7 @@ function parseCsvClient(text, maxRows = 8) {
 const ColumnMapModal = ({ file, ctaLabel = 'Start Verification', onCancel, onStart }) => {
   const [rows, setRows] = useState(null);
   const [width, setWidth] = useState(0);
-  const [labels, setLabels] = useState([]);
+  const [emailCol, setEmailCol] = useState(-1);
   const [hasHeader, setHasHeader] = useState(true);
   const [dedupe, setDedupe] = useState(true);
   const [err, setErr] = useState('');
@@ -1499,50 +1486,45 @@ const ColumnMapModal = ({ file, ctaLabel = 'Start Verification', onCancel, onSta
     const reader = new FileReader();
     reader.onload = () => {
       if (cancelled) return;
-      const parsed = parseCsvClient(String(reader.result || ''), 8);
+      const parsed = parseCsvClient(String(reader.result || ''), 30);
       if (!parsed.length) { setErr('The file looks empty or unreadable.'); setRows([]); return; }
       const w = parsed.reduce((m, r) => Math.max(m, r.length), 0);
       const rowHasEmail = (r) => r.some(c => EMAIL_RE_C.test(String(c || '').trim()));
       const detectedHeader = parsed.length > 1 && !rowHasEmail(parsed[0]) && parsed.slice(1).some(rowHasEmail);
       const dataRows = detectedHeader ? parsed.slice(1) : parsed;
-      let emailCol = -1;
+      let ec = -1;
       for (let c = 0; c < w; c++) {
-        if (dataRows.some(r => EMAIL_RE_C.test(String(r[c] || '').trim()))) { emailCol = c; break; }
+        if (dataRows.some(r => EMAIL_RE_C.test(String(r[c] || '').trim()))) { ec = c; break; }
       }
-      const lbls = [];
-      for (let c = 0; c < w; c++) {
-        if (c === emailCol) lbls.push('Email');
-        else lbls.push(detectedHeader ? guessField(parsed[0][c]) : 'Custom');
-      }
-      setRows(parsed); setWidth(w); setLabels(lbls); setHasHeader(detectedHeader); setErr('');
+      setRows(parsed); setWidth(w); setEmailCol(ec); setHasHeader(detectedHeader); setErr('');
     };
     reader.onerror = () => { if (!cancelled) { setErr('Could not read the file.'); setRows([]); } };
     reader.readAsText(file);
     return () => { cancelled = true; };
   }, [file]);
 
-  const setLabel = (c, v) => setLabels(prev => {
-    const next = prev.slice();
-    if (v === 'Email') for (let i = 0; i < next.length; i++) if (next[i] === 'Email') next[i] = 'Custom';
-    next[c] = v;
-    return next;
+  const cols = Array.from({ length: width }, (_, c) => c);
+  // Column titles ARE the file's own first row (when it's a header); otherwise a
+  // generic "Column N". Original order is preserved exactly as uploaded.
+  const headerNames = cols.map(c => {
+    if (hasHeader && rows && rows[0] && rows[0][c] != null && String(rows[0][c]).trim() !== '') return String(rows[0][c]).trim();
+    return `Column ${c + 1}`;
   });
+  const dataRows = rows ? (hasHeader ? rows.slice(1) : rows) : [];
 
   const start = () => {
-    const emailCol = labels.indexOf('Email');
-    if (emailCol === -1) { setErr('Please choose which column contains the email address.'); return; }
-    onStart({ emailCol, hasHeader: hasHeader ? 'yes' : 'no', dedupe, labels });
+    if (emailCol < 0) { setErr('Select which column contains the email address.'); return; }
+    // Send the real header names as labels so the exported file keeps them, in
+    // the same order, with the verdict columns appended after them.
+    onStart({ emailCol, hasHeader: hasHeader ? 'yes' : 'no', dedupe, labels: headerNames });
   };
-
-  const previewRows = rows ? (hasHeader ? rows.slice(1) : rows) : [];
-  const cols = Array.from({ length: width }, (_, c) => c);
 
   return (
     <div className="colmap-overlay" onClick={onCancel}>
       <div className="colmap-modal" onClick={e => e.stopPropagation()}>
         <button className="colmap-close" onClick={onCancel} aria-label="Close"><X size={18} /></button>
-        <h2 className="colmap-title">Match the columns in your file</h2>
-        <p className="colmap-sub">Displaying the first few rows of your file:</p>
+        <h2 className="colmap-title">Review your file</h2>
+        <p className="colmap-sub">Every column stays in its original order; a <strong>Verification Status</strong> column is added at the end.</p>
         <p className="colmap-file">{file?.name}</p>
 
         {!rows && !err && <p className="muted" style={{ textAlign: 'center', padding: '2rem' }}><Loader2 className="loader" size={18} /> Reading file…</p>}
@@ -1550,38 +1532,55 @@ const ColumnMapModal = ({ file, ctaLabel = 'Start Verification', onCancel, onSta
 
         {rows && width > 0 && (
           <>
+            <div className="colmap-emailpick">
+              <span>Which column holds the email address?</span>
+              <select value={emailCol} onChange={e => setEmailCol(Number(e.target.value))}>
+                <option value={-1}>Select a column…</option>
+                {cols.map(c => <option key={c} value={c}>{headerNames[c]}</option>)}
+              </select>
+            </div>
+
+            {/* Spreadsheet-style preview: scrolls both ways, sticky header + row #. */}
             <div className="colmap-tablewrap">
-              <table className="colmap-table">
+              <table className="colmap-table sheet">
                 <thead>
                   <tr>
+                    <th className="colmap-corner">#</th>
                     {cols.map(c => (
-                      <th key={c}>
-                        <select className="colmap-select" value={labels[c] || 'Custom'} onChange={e => setLabel(c, e.target.value)}>
-                          {FIELD_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-                        </select>
+                      <th key={c} className={c === emailCol ? 'is-email' : ''}>
+                        {headerNames[c]}{c === emailCol && <span className="colmap-emailtag">Email</span>}
                       </th>
                     ))}
+                    <th className="colmap-status-th">Verification Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {previewRows.slice(0, 6).map((r, ri) => (
+                  {dataRows.map((r, ri) => (
                     <tr key={ri}>
-                      {cols.map(c => <td key={c}>{r[c] != null ? String(r[c]) : ''}</td>)}
+                      <td className="colmap-corner">{ri + 1}</td>
+                      {cols.map(c => (
+                        <td key={c} className={c === emailCol ? 'is-email' : ''} title={r[c] != null ? String(r[c]) : ''}>
+                          {r[c] != null ? String(r[c]) : ''}
+                        </td>
+                      ))}
+                      <td className="colmap-status-td">pending</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            <p className="colmap-hint" style={{ textAlign: 'left', marginTop: '0.4rem' }}>
+              Showing {dataRows.length} row{dataRows.length === 1 ? '' : 's'} — scroll for more. The full file is verified.
+            </p>
 
             <div className="colmap-conditions">
               <div className="colmap-cond">
-                <span>Does your first row contain labels?</span>
+                <span>Does your first row contain labels (headers)?</span>
                 <label className="colmap-radio"><input type="radio" checked={hasHeader} onChange={() => setHasHeader(true)} /> Yes</label>
                 <label className="colmap-radio"><input type="radio" checked={!hasHeader} onChange={() => setHasHeader(false)} /> No</label>
               </div>
-              <p className="colmap-hint">If your file has a header on the first populated row, we'll skip it.</p>
               <div className="colmap-cond">
-                <span>Can we remove duplicate emails?</span>
+                <span>Remove duplicate emails?</span>
                 <label className="colmap-radio"><input type="radio" checked={dedupe} onChange={() => setDedupe(true)} /> Yes</label>
                 <label className="colmap-radio"><input type="radio" checked={!dedupe} onChange={() => setDedupe(false)} /> No</label>
               </div>
