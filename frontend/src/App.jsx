@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation, useParams, Link } from 'react-router-dom';
-import { List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Star, Quote, Phone, User, Lock, Eye, EyeOff, Smartphone } from 'lucide-react';
+import { List, Upload, Search, Download, CheckCircle, XCircle, AlertCircle, HelpCircle, Loader2, LogOut, LayoutDashboard, History, Clock, ChevronDown, ChevronRight, Shield, FileText, Cookie, Scale, RefreshCw, Users, Trash2, Plus, Minus, ShieldCheck, Zap, ArrowRight, CheckCircle2, MailCheck, Menu, X, ArrowUp, Star, Quote, Phone, User, Lock, Eye, EyeOff, Smartphone, Key, Copy, Code } from 'lucide-react';
 import './App.css';
 import { googleSignIn } from './firebase';
 
@@ -1269,6 +1269,7 @@ const PAGE_TITLES = {
   '/dashboard/catchall': 'Catch-All Verifier',
   '/dashboard/bounce': 'Bounce Rate',
   '/dashboard/billing': 'Buy Credits',
+  '/dashboard/api': 'API',
   '/dashboard/tasks': 'Tasks & Results',
   '/dashboard/account': 'My Account',
   '/admin': 'Admin Panel',
@@ -1292,6 +1293,7 @@ const DashboardLayout = ({ children }) => {
           <Link to="/dashboard/catchall" className={`nav-item ${location.pathname==='/dashboard/catchall'?'active':''}`}><MailCheck size={18}/> Catch-All Verifier</Link>
           <Link to="/dashboard/bounce" className={`nav-item ${location.pathname==='/dashboard/bounce'?'active':''}`}><AlertCircle size={18}/> Bounce Rate</Link>
           <Link to="/dashboard/billing" className={`nav-item ${location.pathname==='/dashboard/billing'?'active':''}`}><Plus size={18}/> Buy Credits</Link>
+          <Link to="/dashboard/api" className={`nav-item ${location.pathname==='/dashboard/api'?'active':''}`}><Code size={18}/> API</Link>
           <Link to="/dashboard/tasks" className={`nav-item ${location.pathname==='/dashboard/tasks'?'active':''}`}><History size={18}/> Tasks &amp; Results</Link>
           <Link to="/dashboard/account" className={`nav-item ${location.pathname==='/dashboard/account'?'active':''}`}><User size={18}/> My Account</Link>
           {(user?.role === 'admin' || user?.role === 'superadmin') && (
@@ -1679,7 +1681,9 @@ const EmailVerification = () => {
       {progress && <JobProgress processed={progress.processed} total={progress.total} />}
       {results.length > 0 && <ResultsTable results={results} title={resultsTitle} />}
 
-      <HistoryPanel version={historyVersion} />
+      {/* This page's own history (single + bulk + csv). Everything, including
+          catch-all and bounce runs, is on Tasks & Results. */}
+      <HistoryPanel type="single,bulk,csv" version={historyVersion} />
 
       <VerificationGuide />
     </div>
@@ -1695,6 +1699,7 @@ const BounceChecker = () => {
   const [results, setResults] = useState(null);
   const [showMap, setShowMap] = useState(false);
   const [mode, setMode] = useState('fast');
+  const [historyVersion, setHistoryVersion] = useState(0);
   const fileInputRef = useRef(null);
 
   const pickFile = (f) => { if (f) { setFile(f); setShowMap(true); } };
@@ -1721,7 +1726,7 @@ const BounceChecker = () => {
       let out = done.results;
       if (!out && done.batchId) { const b = await apiFetch(`/history/${done.batchId}`); out = (b && b.results) || []; }
       setResults(out || []);
-      await refreshUser();
+      await refreshUser(); setHistoryVersion(v => v + 1);
     } catch (err) { alert(friendlyError(err)); }
     setProgress(null); setLoading(false);
   };
@@ -1842,6 +1847,8 @@ const BounceChecker = () => {
           </div>
         </div>
       )}
+
+      <HistoryPanel type="bounce" version={historyVersion} />
     </div>
   );
 };
@@ -1862,6 +1869,7 @@ const CatchAllVerifier = () => {
   const { refreshUser } = useAuth();
   const [results, setResults] = useState([]);
   const [progress, setProgress] = useState(null);
+  const [historyVersion, setHistoryVersion] = useState(0);
 
   const [email, setEmail] = useState('');
   const [singleLoading, setSingleLoading] = useState(false);
@@ -1883,7 +1891,7 @@ const CatchAllVerifier = () => {
       const data = await apiFetch('/catchall', { method: 'POST', body: JSON.stringify({ email: email.trim() }) });
       if (data.error) throw new Error(data.error);
       setResults([data]);
-      await refreshUser();
+      await refreshUser(); setHistoryVersion(v => v + 1);
     } catch (err) { alert(friendlyError(err)); }
     setSingleLoading(false);
   };
@@ -1898,7 +1906,7 @@ const CatchAllVerifier = () => {
       let out = done.results;
       if (!out && done.batchId) { const b = await apiFetch(`/history/${done.batchId}`); out = (b && b.results) || []; }
       setResults(out || []);
-      await refreshUser();
+      await refreshUser(); setHistoryVersion(v => v + 1);
     } catch (err) { alert(friendlyError(err)); }
     setProgress(null); setLoading(false);
   };
@@ -1997,6 +2005,8 @@ const CatchAllVerifier = () => {
       )}
 
       {results.length > 0 && <ResultsTable results={results} title="Catch-all results" />}
+
+      <HistoryPanel type="catchall" version={historyVersion} />
     </div>
   );
 };
@@ -2127,6 +2137,162 @@ const BillingPage = () => {
       <p className="muted-inline" style={{ display: 'block', marginTop: '1rem' }}>
         Payments are processed securely. For manual methods (Wise / bank), your credits are added after we confirm the transfer.
       </p>
+    </div>
+  );
+};
+
+// --- API page: key management + docs & code samples -------------------------
+const CodeBlock = ({ title, code }) => {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1600); }
+    catch { /* clipboard unavailable */ }
+  };
+  return (
+    <div className="code-block">
+      <div className="code-block-head">
+        <span>{title}</span>
+        <button className="code-copy" onClick={copy}>{copied ? <CheckCircle2 size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy'}</button>
+      </div>
+      <pre><code>{code}</code></pre>
+    </div>
+  );
+};
+
+const ApiPage = () => {
+  const [info, setInfo] = useState(null);        // { exists, prefix, createdAt }
+  const [freshKey, setFreshKey] = useState(null); // full key, shown once after generate
+  const [busy, setBusy] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+
+  const load = () => apiFetch('/auth/apikey').then(setInfo).catch(() => setInfo({ exists: false }));
+  useEffect(() => { load(); }, []);
+
+  const generate = async () => {
+    if (info?.exists && !window.confirm('Generating a new key immediately invalidates the old one. Continue?')) return;
+    setBusy(true);
+    try {
+      const r = await apiFetch('/auth/apikey/generate', { method: 'POST' });
+      if (r.error) throw new Error(r.error);
+      setFreshKey(r.key); setInfo({ exists: true, prefix: r.prefix });
+    } catch (e) { alert(friendlyError(e)); }
+    setBusy(false);
+  };
+  const revoke = async () => {
+    if (!window.confirm('Revoke the API key? Integrations using it will stop working.')) return;
+    setBusy(true);
+    try {
+      const r = await apiFetch('/auth/apikey', { method: 'DELETE' });
+      if (r.error) throw new Error(r.error);
+      setFreshKey(null); setInfo({ exists: false });
+    } catch (e) { alert(friendlyError(e)); }
+    setBusy(false);
+  };
+  const copyKey = async () => {
+    try { await navigator.clipboard.writeText(freshKey); setCopiedKey(true); setTimeout(() => setCopiedKey(false), 1600); }
+    catch { /* clipboard unavailable */ }
+  };
+
+  const BASE = window.location.origin;
+  const KEY_SHOWN = freshKey || 'YOUR_API_KEY';
+  const curlExample = `curl -X POST ${BASE}/v1/verify \\
+  -H "Content-Type: application/json" \\
+  -H "X-API-Key: ${KEY_SHOWN}" \\
+  -d '{"email": "name@example.com"}'`;
+  const jsExample = `const res = await fetch("${BASE}/v1/verify", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-API-Key": "${KEY_SHOWN}",
+  },
+  body: JSON.stringify({ email: "name@example.com" }),
+});
+const result = await res.json();
+console.log(result.status, result.confidence);`;
+  const pyExample = `import requests
+
+res = requests.post(
+    "${BASE}/v1/verify",
+    headers={"X-API-Key": "${KEY_SHOWN}"},
+    json={"email": "name@example.com"},
+)
+print(res.json())`;
+  const responseExample = `{
+  "email": "name@example.com",
+  "status": "safe",
+  "confidence": 85,
+  "provider": "google",
+  "isCatchAll": false,
+  "disposable": false,
+  "reason": "Mailbox exists",
+  "charged": 1
+}`;
+
+  return (
+    <div>
+      <p className="muted" style={{ marginTop: 0, marginBottom: '1.5rem' }}>
+        Verify emails from your own code. Authenticate with your API key in the <code>X-API-Key</code> header.
+        Each conclusive result costs 1 credit; <code>unknown</code> results are free.
+      </p>
+
+      {/* Key management */}
+      <div className="card" style={{ padding: '1.5rem' }}>
+        <div className="verify-opt-title"><Key size={17} /> Your API key</div>
+        {freshKey ? (
+          <div className="api-key-reveal">
+            <p style={{ fontWeight: 600, color: '#b45309', marginBottom: '0.5rem' }}>
+              Copy this key now. For security it is shown only once; we store only a hash of it.
+            </p>
+            <div className="api-key-row">
+              <code className="api-key-value">{freshKey}</code>
+              <button className="btn-secondary" onClick={copyKey}>{copiedKey ? <CheckCircle2 size={15} /> : <Copy size={15} />} {copiedKey ? 'Copied' : 'Copy'}</button>
+            </div>
+          </div>
+        ) : info === null ? (
+          <p className="muted"><Loader2 className="loader" size={16} /> Loading…</p>
+        ) : info.exists ? (
+          <p className="muted" style={{ margin: '0.5rem 0 0' }}>
+            Active key: <code className="api-key-value">{info.prefix}</code>
+            {info.createdAt && <span className="muted-inline"> · created {formatDate(info.createdAt)}</span>}
+          </p>
+        ) : (
+          <p className="muted" style={{ margin: '0.5rem 0 0' }}>No API key yet. Generate one to start using the API.</p>
+        )}
+        <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1rem', flexWrap: 'wrap' }}>
+          <button className="btn-primary" onClick={generate} disabled={busy}>
+            {busy ? <Loader2 className="loader" size={16} /> : <Key size={16} />} {info?.exists ? 'Generate new key' : 'Generate API key'}
+          </button>
+          {info?.exists && (
+            <button className="btn-secondary" onClick={revoke} disabled={busy}><Trash2 size={15} /> Revoke</button>
+          )}
+        </div>
+      </div>
+
+      {/* Endpoint reference */}
+      <div className="card" style={{ padding: '1.5rem', marginTop: '1.25rem' }}>
+        <div className="verify-opt-title"><Code size={17} /> Endpoints</div>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="results-table" style={{ marginTop: '0.5rem' }}>
+            <thead><tr><th>Method</th><th>Path</th><th>Description</th><th>Cost</th></tr></thead>
+            <tbody>
+              <tr><td><span className="badge type-single">POST</span></td><td><code>/v1/verify</code></td><td>Verify one address. Body: <code>{'{"email": "..."}'}</code></td><td>1 credit (conclusive only)</td></tr>
+              <tr><td><span className="badge type-csv">GET</span></td><td><code>/v1/credits</code></td><td>Your current credit balance.</td><td>Free</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="muted-inline" style={{ display: 'block', marginTop: '0.75rem' }}>
+          Rate limit: 120 requests/minute per key. Possible <code>status</code> values:
+          safe, role, catch-all, disposable, invalid, inbox_full, disabled, spamtrap, unknown.
+        </p>
+      </div>
+
+      {/* Code samples */}
+      <div style={{ marginTop: '1.25rem' }}>
+        <CodeBlock title="cURL" code={curlExample} />
+        <CodeBlock title="JavaScript (fetch)" code={jsExample} />
+        <CodeBlock title="Python (requests)" code={pyExample} />
+        <CodeBlock title="Example response" code={responseExample} />
+      </div>
     </div>
   );
 };
@@ -2738,7 +2904,7 @@ const TasksResults = () => {
         <div className="history-header">
           <div style={{display:'flex', alignItems:'center', gap:'0.75rem', flexWrap:'wrap'}}>
             <div className="tabs">
-              {['all', 'single', 'bulk', 'csv'].map(t => (
+              {['all', 'single', 'bulk', 'csv', 'catchall', 'bounce'].map(t => (
                 <button key={t} className={`tab ${filter === t ? 'active' : ''}`} onClick={() => setFilter(t)}>
                   {t === 'all' ? 'All' : (TYPE_LABELS[t] || t)}
                 </button>
@@ -2983,7 +3149,17 @@ const AdminPanel = () => {
   );
 };
 
-// Per-user lifetime history - opened by clicking a row in the Admin Panel.
+// Credit-ledger entry kinds -> display label + badge colour class.
+const CREDIT_KIND = {
+  admin_add:    { label: 'Admin added',   cls: 'valid' },
+  admin_remove: { label: 'Admin removed', cls: 'invalid' },
+  purchase:     { label: 'Purchase',      cls: 'type-catchall' },
+  signup_bonus: { label: 'Signup bonus',  cls: 'type-single' },
+};
+
+// Per-user profile - opened by clicking a row in the Admin Panel. Shows the
+// account's lifetime stats and its CREDIT history (verification runs already
+// live on Tasks & Results).
 const AdminUserHistory = () => {
   const { uid } = useParams();
   const navigate = useNavigate();
@@ -3029,35 +3205,30 @@ const AdminUserHistory = () => {
             <StatCard label="Lifetime Executions" value={(u.executions ?? 0).toLocaleString()} />
           </div>
 
+          {/* Credit history ONLY — verification runs already live on Tasks &
+              Results, so repeating them here would be duplication. */}
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <div className="history-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                 <History size={18} color="var(--accent-color)" />
-                <h3 style={{ fontSize: '1.05rem' }}>Executions ({(data.batches || []).length})</h3>
+                <h3 style={{ fontSize: '1.05rem' }}>Credit History ({(data.creditLog || []).length})</h3>
               </div>
-              <span className="muted-inline">Stored results are kept for {data.retentionDays} days; the totals above are lifetime.</span>
+              <span className="muted-inline">Who added, removed or purchased credits, and when.</span>
             </div>
-            {(data.batches || []).length === 0 ? (
-              <div className="history-empty">No stored executions in the last {data.retentionDays} days.</div>
+            {(data.creditLog || []).length === 0 ? (
+              <div className="history-empty">No credit changes recorded yet.</div>
             ) : (
               <div style={{ overflowX: 'auto' }}>
                 <table className="results-table">
-                  <thead><tr><th>Task</th><th>Type</th><th>Date</th><th>Total</th><th>Breakdown</th></tr></thead>
+                  <thead><tr><th>Date</th><th>Change</th><th>Method</th><th>By</th><th>Note</th></tr></thead>
                   <tbody>
-                    {data.batches.map(b => (
-                      <tr key={b.id}>
-                        <td><strong>{b.name || `#${b.batchNumber ?? b.id}`}</strong></td>
-                        <td><span className={`badge type-${b.type}`}>{TYPE_LABELS[b.type] || b.type}</span></td>
-                        <td style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{formatDate(b.createdAt)}</td>
-                        <td>{(b.total || 0).toLocaleString()}</td>
-                        <td>
-                          <div className="pill-row">
-                            <CountPill label="Valid" value={b.counts.valid} cls="valid" />
-                            <CountPill label="Invalid" value={b.counts.invalid} cls="invalid" />
-                            <CountPill label="Catch-all" value={b.counts.catchAll} cls="catch-all" />
-                            <CountPill label="Unknown" value={b.counts.unknown} cls="unknown" />
-                          </div>
-                        </td>
+                    {data.creditLog.map(c => (
+                      <tr key={c.id}>
+                        <td style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{formatDate(c.createdAt)}</td>
+                        <td><strong style={{ color: c.delta >= 0 ? '#059669' : '#dc2626' }}>{c.delta >= 0 ? '+' : ''}{c.delta.toLocaleString()}</strong></td>
+                        <td><span className={`badge ${CREDIT_KIND[c.kind]?.cls || 'unknown'}`}>{CREDIT_KIND[c.kind]?.label || c.kind}</span></td>
+                        <td style={{ fontSize: '0.9rem' }}>{c.by || '-'}</td>
+                        <td style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{c.note || '-'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -3113,6 +3284,7 @@ function AppRoutes() {
       <Route path="/dashboard/catchall" element={<ProtectedRoute><CatchAllVerifier /></ProtectedRoute>} />
       <Route path="/dashboard/bounce" element={<ProtectedRoute><BounceChecker /></ProtectedRoute>} />
       <Route path="/dashboard/billing" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
+      <Route path="/dashboard/api" element={<ProtectedRoute><ApiPage /></ProtectedRoute>} />
       {/* Old separate routes now redirect to the unified page */}
       <Route path="/dashboard/single" element={<Navigate to="/dashboard/verify" replace />} />
       <Route path="/dashboard/bulk" element={<Navigate to="/dashboard/verify" replace />} />

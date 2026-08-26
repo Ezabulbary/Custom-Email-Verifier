@@ -150,6 +150,7 @@ app.post('/billing/stripe/webhook', express.raw({ type: 'application/json' }), a
             } else {
                 try {
                     await store.adjustCredits(userId, credits);
+                    await store.logCredit(userId, { delta: credits, kind: 'purchase', by: 'stripe', note: `Stripe ${s.id}` });
                     console.log(`[Billing] Granted ${credits} credits to user ${userId} (Stripe ${s.id}).`);
                 } catch (e) { console.error('[Billing] credit grant failed:', e.message); }
             }
@@ -1132,6 +1133,84 @@ Pack: ${pack.name} - ${pack.credits.toLocaleString()} credits - ${pack.price} ${
     res.json({ reference, message: `Use reference ${reference} in your payment note. Your credits are added once we confirm the transfer.` });
 });
 
+// --- API keys + public API (/v1) ---
+// A user can hold ONE API key. Only its SHA-256 hash is stored; the full key is
+// returned once, at generation time. The public /v1 endpoints authenticate with
+// the X-API-Key header and bill credits exactly like the in-app verifier.
+const sha256hex = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+
+app.post('/auth/apikey/generate', authenticateToken, async (req, res) => {
+    try {
+        const key = 'bc_' + crypto.randomBytes(24).toString('hex');
+        const prefix = key.slice(0, 11) + '…';
+        await store.setApiKey(req.user.id, { hash: sha256hex(key), prefix });
+        res.json({ key, prefix });   // the ONLY time the full key is returned
+    } catch (e) {
+        console.error('API key generate error:', e.message);
+        res.status(500).json({ error: 'Could not generate an API key' });
+    }
+});
+app.get('/auth/apikey', authenticateToken, async (req, res) => {
+    try { res.json(await store.getApiKeyInfo(req.user.id) || { exists: false }); }
+    catch (e) { res.status(500).json({ error: 'Could not load API key info' }); }
+});
+app.delete('/auth/apikey', authenticateToken, async (req, res) => {
+    try { await store.clearApiKey(req.user.id); res.json({ success: true }); }
+    catch (e) { res.status(500).json({ error: 'Could not revoke the API key' }); }
+});
+
+// Authenticate a /v1 request by API key. 401 on a missing/unknown key.
+async function authenticateApiKey(req, res, next) {
+    const key = String(req.headers['x-api-key'] || '').trim();
+    if (!key || !key.startsWith('bc_')) return res.status(401).json({ error: 'Missing or invalid API key. Send it in the X-API-Key header.' });
+    try {
+        const user = await store.findUserByApiKeyHash(sha256hex(key));
+        if (!user) return res.status(401).json({ error: 'Missing or invalid API key. Send it in the X-API-Key header.' });
+        req.apiUser = user;
+        next();
+    } catch (e) {
+        console.error('API auth error:', e.message);
+        res.status(500).json({ error: 'Authentication failed' });
+    }
+}
+// Per-key rate limit (falls back to IP when the key is absent/unknown).
+const apiLimiter = rateLimit({
+    name: 'api', windowMs: 60 * 1000, max: 120,
+    keyGenerator: (req) => String(req.headers['x-api-key'] || '') || undefined,
+    message: 'API rate limit exceeded (120 requests/minute). Slow down.',
+});
+
+// POST /v1/verify { "email": "a@b.com" } -> full verification result.
+// Charges 1 credit for a conclusive status; 'unknown' is free.
+app.post('/v1/verify', apiLimiter, authenticateApiKey, async (req, res) => {
+    const email = req.body && req.body.email;
+    if (!email || typeof email !== 'string') return res.status(400).json({ error: 'Body must be JSON: { "email": "name@example.com" }' });
+    try {
+        const reservation = await store.reserveCredits(req.apiUser.id, 1);
+        if (!reservation.ok) return res.status(402).json({ error: 'Insufficient credits' });
+        let result;
+        try { result = await verifyEmail(email.trim()); }
+        catch (e) { await store.adjustCredits(req.apiUser.id, 1); throw e; }
+        const charge = isChargeable(result.status) ? 1 : 0;
+        if (!charge) await store.adjustCredits(req.apiUser.id, 1);
+        else await store.addUsedCredits(req.apiUser.id, 1);
+        await saveBatch(req.apiUser.id, 'single', [result], 'API');
+        res.json({
+            email: result.email, status: result.status, confidence: result.confidence,
+            provider: result.provider, isCatchAll: !!result.isCatchAll,
+            disposable: !!result.disposable, reason: result.reason, charged: charge,
+        });
+    } catch (e) {
+        console.error('API verify error:', e.message);
+        res.status(500).json({ error: 'Verification failed' });
+    }
+});
+
+// GET /v1/credits -> current balance.
+app.get('/v1/credits', apiLimiter, authenticateApiKey, (req, res) => {
+    res.json({ credits: req.apiUser.credits });
+});
+
 // Poll the progress of a background bulk/CSV job.
 app.get('/verify/status/:jobId', authenticateToken, (req, res) => {
     const job = jobs.get(req.params.jobId);
@@ -1159,7 +1238,14 @@ app.get('/history', authenticateToken, async (req, res) => {
     let limit = parseInt(req.query.limit, 10);
     if (Number.isNaN(limit) || limit < 1) limit = 50;
     if (limit > 500) limit = 500;
-    const typeFilter = ['single', 'bulk', 'csv'].includes(type) ? type : undefined;
+    // `type` may be one type or a comma-separated list (each page shows its own
+    // history: Email Verification = single,bulk,csv; Catch-All = catchall; …).
+    const KNOWN_TYPES = ['single', 'bulk', 'csv', 'catchall', 'bounce'];
+    let typeFilter;
+    if (type) {
+        const parts = String(type).split(',').map(s => s.trim()).filter(t => KNOWN_TYPES.includes(t));
+        typeFilter = parts.length === 0 ? undefined : (parts.length === 1 ? parts[0] : parts);
+    }
 
     try {
         const batches = await store.listBatches(req.user.id, { type: typeFilter, limit });
@@ -1252,9 +1338,9 @@ const readId = (raw) => {
     return id || null;
 };
 
-// Lifetime history for one user: profile + lifetime counters + their stored
-// executions (batches inside the retention window; lifetime totals are kept on
-// the user document so they survive the 30-day batch cleanup).
+// Per-user profile for the Admin Panel: lifetime counters + the CREDIT ledger
+// (who added/removed credits, purchases, signup bonus). Verification runs are
+// deliberately NOT included here — they already live on Tasks & Results.
 app.get('/admin/users/:id/history', authenticateToken, requireAdmin, async (req, res) => {
     const id = readId(req.params.id);
     if (!id) return res.status(400).json({ error: 'Invalid input' });
@@ -1265,8 +1351,8 @@ app.get('/admin/users/:id/history', authenticateToken, requireAdmin, async (req,
         }
         const user = await store.adminUserDetail(id);
         if (!user) return res.status(404).json({ error: 'User not found' });
-        const batches = await store.listBatches(id, { type: null, limit: 500 });
-        res.json({ user, batches, retentionDays: HISTORY_RETENTION_DAYS });
+        const creditLog = await store.listCreditLog(id, 200);
+        res.json({ user, creditLog });
     } catch (e) {
         console.error('Admin user history error:', e.message);
         res.status(500).json({ error: 'Failed to load user history' });
@@ -1285,6 +1371,12 @@ app.post('/admin/users/:id/credits', authenticateToken, requireAdmin, async (req
             return res.status(404).json({ error: 'User not found' });
         }
         const credits = await store.adjustCredits(id, delta);
+        // Ledger entry: who changed this account's credits, when, by how much.
+        await store.logCredit(id, {
+            delta,
+            kind: delta >= 0 ? 'admin_add' : 'admin_remove',
+            by: req.user.email || String(req.user.id),
+        });
         res.json({ success: true, credits });
     } catch (e) {
         console.error('Adjust credits error:', e.message);
@@ -1347,7 +1439,7 @@ app.delete('/admin/users/:id', authenticateToken, requireAdmin, async (req, res)
 // per-path proxy rules to maintain (a missing /history or /admin rule is exactly
 // what makes Tasks & Results fail with "unexpected response HTTP 200"). The API
 // routes above always take precedence; anything else falls back to index.html.
-const API_PREFIX_RE = /^\/(auth|verify|bounce|catchall|billing|history|admin|health)(\/|$)/;
+const API_PREFIX_RE = /^\/(auth|verify|bounce|catchall|billing|history|admin|health|v1)(\/|$)/;
 const DIST_DIR = require('path').join(__dirname, 'frontend', 'dist');
 if (fs.existsSync(DIST_DIR)) {
     app.use(express.static(DIST_DIR));

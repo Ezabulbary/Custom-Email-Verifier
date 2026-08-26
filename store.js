@@ -188,6 +188,15 @@ function firestoreStore() {
                 });
                 return true;
             });
+            if (created && credits > 0) {
+                // Ledger entry for the signup bonus (best-effort).
+                try {
+                    await ref.collection('credit_log').add({
+                        delta: credits, kind: 'signup_bonus', by: 'system', note: null,
+                        createdAt: serverTimestamp(),
+                    });
+                } catch {}
+            }
             return created ? { id: ref.id, email, credits, role } : null;
         },
         async setPassword(id, hash) {
@@ -243,6 +252,54 @@ function firestoreStore() {
             if (!(amount > 0)) return;
             await users.doc(String(id)).set({ usedCredits: FieldValue.increment(amount) }, { merge: true });
         },
+        // --- Credit ledger -------------------------------------------------
+        // One document per credit change that ISN'T verification usage: admin
+        // add/remove, purchases, signup bonus. Shown on the Admin Panel's
+        // per-user profile. (Usage is intentionally excluded — the lifetime
+        // usedCredits counter covers it without flooding the ledger.)
+        async logCredit(id, { delta, kind, by, note }) {
+            try {
+                await users.doc(String(id)).collection('credit_log').add({
+                    delta: Number(delta) || 0,
+                    kind: String(kind || 'adjustment'),
+                    by: by ? String(by) : null,
+                    note: note ? String(note).slice(0, 300) : null,
+                    createdAt: serverTimestamp(),
+                });
+            } catch (e) { console.error('[CreditLog] write failed:', e.message); }
+        },
+        async listCreditLog(id, limit = 200) {
+            const snap = await users.doc(String(id)).collection('credit_log')
+                .orderBy('createdAt', 'desc').limit(limit).get();
+            return snap.docs.map(d => {
+                const x = d.data();
+                return { id: d.id, delta: x.delta || 0, kind: x.kind || 'adjustment', by: x.by || null, note: x.note || null, createdAt: toIso(x.createdAt) };
+            });
+        },
+
+        // --- API keys ------------------------------------------------------
+        // Only a SHA-256 hash of the key is stored (plus a display prefix); the
+        // full key is shown to the user once, at generation time.
+        async setApiKey(id, { hash, prefix }) {
+            await users.doc(String(id)).set({ apiKeyHash: hash, apiKeyPrefix: prefix, apiKeyCreatedAt: serverTimestamp() }, { merge: true });
+        },
+        async clearApiKey(id) {
+            await users.doc(String(id)).update({ apiKeyHash: FieldValue.delete(), apiKeyPrefix: FieldValue.delete(), apiKeyCreatedAt: FieldValue.delete() });
+        },
+        async getApiKeyInfo(id) {
+            const doc = await users.doc(String(id)).get();
+            if (!doc.exists) return null;
+            const d = doc.data();
+            return d.apiKeyHash ? { exists: true, prefix: d.apiKeyPrefix || null, createdAt: toIso(d.apiKeyCreatedAt) } : { exists: false };
+        },
+        async findUserByApiKeyHash(hash) {
+            const snap = await users.where('apiKeyHash', '==', String(hash)).limit(1).get();
+            if (snap.empty) return null;
+            const doc = snap.docs[0];
+            const d = doc.data();
+            return { id: doc.id, email: d.email, credits: d.credits || 0, role: d.role || 'user' };
+        },
+
         // Webhook idempotency: returns true only the FIRST time an event id is
         // claimed (create() fails if the document already exists), so a retried
         // or replayed payment event can never grant credits twice.
@@ -368,11 +425,16 @@ function firestoreStore() {
         async listBatches(userId, { type, limit }) {
             const col = users.doc(String(userId)).collection('batches');
             const cut = cutoffMs();
-            // When filtering by type we use an equality-only query and sort in JS,
-            // so Firestore needs only its automatic single-field indexes — no
-            // manual composite (type + createdAt) index to create.
+            // When filtering by type we use an equality/in-only query and sort in
+            // JS, so Firestore needs only its automatic single-field indexes — no
+            // manual composite (type + createdAt) index to create. `type` may be a
+            // single type or an array of types (e.g. the Email Verification page
+            // shows single+bulk+csv together).
             let docs;
-            if (type) {
+            if (Array.isArray(type) && type.length) {
+                const snap = await col.where('type', 'in', type.slice(0, 10)).get();
+                docs = snap.docs;
+            } else if (type) {
                 const snap = await col.where('type', '==', type).get();
                 docs = snap.docs;
             } else {
