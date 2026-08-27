@@ -246,6 +246,25 @@ function catchAllVerdict(accepted, hardReject) {
     return 'unknown';
 }
 
+// Determine a domain's catch-all status in a DEDICATED SMTP session that probes
+// ONLY random addresses (no real recipient). This is the second chance used when
+// the inline probes — the ones sharing the real address's session — came back
+// greylisted or dropped (very common: a server accepts the first RCPT and then
+// defers/drops the rest to stop enumeration). Because the verdict is stable per
+// domain, it is cached, so a whole list on one domain pays for this at most once.
+// Returns { verdict, probeMessages, ts }.
+async function probeCatchAll(domain, mxHosts) {
+    const cached = catchAllCache.get(domain);
+    if (cached && Date.now() - cached.ts < CATCH_ALL_TTL && cached.verdict !== 'unknown') return cached;
+    const fakes = Array.from({ length: CATCH_ALL_PROBES }, () => `${randomLocalPart()}@${domain}`);
+    const sess = await smtpMultiFallback(mxHosts, fakes);
+    const t = tallyProbes([sess.real, ...sess.probes]);
+    const verdict = catchAllVerdict(t.accepted, t.hardReject);
+    const entry = { verdict, probeMessages: t.messages, ts: Date.now() };
+    if (verdict !== 'unknown') catchAllCache.set(domain, entry);
+    return entry;
+}
+
 async function verifyEmail(email) {
     const result = {
         email,
@@ -395,7 +414,12 @@ async function verifyEmail(email) {
     }
 
     if (real.code === 250) {
-        // 7. Catch-all — from THIS session's probes, or the per-domain cache.
+        // 7. The real address was ACCEPTED (clean 250) — that is positive proof
+        // the server took the mailbox. The ONLY question left is whether the
+        // domain is catch-all (accepts everything). We never let an inconclusive
+        // catch-all probe drag an accepted address back to 'unknown'; the worst
+        // an inconclusive probe can do is leave us calling it deliverable with a
+        // lower confidence, which is how real verifiers behave.
         let verdict, probeMessages;
         if (haveCatchAll) {
             verdict = cached.verdict; probeMessages = cached.probeMessages || [];
@@ -407,6 +431,14 @@ async function verifyEmail(email) {
             if (verdict !== 'unknown') catchAllCache.set(domain, { verdict, probeMessages, ts: Date.now() });
         }
 
+        // Inline probes shared the real address's session, so a server that
+        // defers/drops RCPTs after the first one leaves catch-all 'unknown'.
+        // Give it ONE dedicated (per-domain, cached) probe session as a retry.
+        if (verdict === 'unknown') {
+            const retry = await probeCatchAll(domain, result.mxRecords);
+            if (retry.verdict !== 'unknown') { verdict = retry.verdict; probeMessages = retry.probeMessages || probeMessages; }
+        }
+
         if (verdict === 'not') {
             // A random address is hard-rejected -> not catch-all -> the accepted
             // real address is a genuine mailbox.
@@ -415,12 +447,14 @@ async function verifyEmail(email) {
         }
 
         if (verdict === 'unknown') {
-            // Real address accepted, but probes were greylisted/inconclusive.
+            // Catch-all still couldn't be proven, but the server ACCEPTED the real
+            // address. Treat it as deliverable (valid) with reduced confidence
+            // rather than throwing the positive 250 away as 'unknown'. This is the
+            // single biggest source of false "unknown" results.
             if (m365 && m365.exists === true) {
                 setDeliverable(result, email, 82, 'Microsoft 365 confirms the mailbox exists');
             } else {
-                result.status = 'unknown'; result.confidence = 35;
-                result.reason = 'Server accepted the address but could not confirm catch-all status';
+                setDeliverable(result, email, 55, 'Server accepted the address (deliverable); catch-all status could not be confirmed');
             }
             return result;
         }
