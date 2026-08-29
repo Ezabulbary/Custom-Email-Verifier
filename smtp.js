@@ -20,175 +20,77 @@ const MAIL_FROM = (process.env.VERIFY_MAIL_FROM || `verify@${rawHelo}`).trim();
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// `connectHost`, when provided, is the pre-validated public IP to dial (the
-// caller resolves the MX hostname once and passes the vetted IP here, so this
-// function never triggers a second, unchecked DNS lookup — that would reopen a
-// DNS-rebinding SSRF). Falls back to the hostname if no IP is supplied.
-async function checkSMTP(mxRecord, targetEmail, isCatchAllCheck = false, connectHost = null) {
-    // Add random delay between 100ms and 300ms to reduce rate-limiting
-    await delay(100 + Math.random() * 200);
-
-    return new Promise((resolve) => {
-        const socket = new net.Socket();
-        let step = 0;
-        let heloTried = false;
-        let resultCode = 0;
-        let resultMessage = '';
-        let buffer = '';
-
-        const timeout = setTimeout(() => {
-            socket.destroy();
-            resolve({ code: 0, connected: false, message: 'Connection timeout' });
-        }, TIMEOUT_MS);
-
-        const sendCommand = (cmd) => {
-            socket.write(cmd + '\r\n');
-        };
-
-        // Handle one complete SMTP reply (final line of a possibly multiline response)
-        const handleReply = (code, line) => {
-            switch(step) {
-                case 0: // Expecting 220 Greeting
-                    if (code === 220) {
-                        step++;
-                        sendCommand(`EHLO ${HELO_DOMAIN}`);
-                    } else {
-                        socket.destroy();
-                        resolve({ code, connected: true, message: 'Unexpected greeting' });
-                    }
-                    break;
-                case 1: // Expecting 250 from EHLO (fall back to HELO once)
-                    if (code === 250) {
-                        step++;
-                        sendCommand(`MAIL FROM:<${MAIL_FROM}>`);
-                    } else if (!heloTried) {
-                        heloTried = true;                     // some servers only speak HELO
-                        sendCommand(`HELO ${HELO_DOMAIN}`);
-                    } else {
-                        socket.destroy();
-                        resolve({ code, connected: true, message: 'EHLO/HELO rejected' });
-                    }
-                    break;
-                case 2: // Expecting 250 from MAIL FROM
-                    if (code === 250) {
-                        step++;
-                        sendCommand(`RCPT TO:<${targetEmail}>`);
-                    } else {
-                        socket.destroy();
-                        resolve({ code, connected: true, message: 'MAIL FROM rejected' });
-                    }
-                    break;
-                case 3: // Expecting response from RCPT TO
-                    resultCode = code;
-                    resultMessage = line.trim();
-                    step++;
-                    sendCommand('QUIT');
-                    break;
-                case 4: // Expecting 221 from QUIT
-                    socket.destroy();
-                    break;
-            }
-        };
-
-        socket.on('data', (data) => {
-            buffer += data.toString();
-
-            // An SMTP reply may span multiple lines and multiple TCP chunks.
-            // Process each complete line: "NNN-..." is a continuation, while
-            // "NNN ..." (space at index 3) marks the final line of the reply.
-            let newlineIndex;
-            while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-                const line = buffer.slice(0, newlineIndex).replace(/\r$/, '');
-                buffer = buffer.slice(newlineIndex + 1);
-
-                if (line.length < 3) continue;
-                const code = parseInt(line.substring(0, 3), 10);
-                if (Number.isNaN(code)) continue;
-
-                // Continuation line of a multiline reply -> keep reading.
-                if (line.charAt(3) === '-') continue;
-
-                handleReply(code, line);
-            }
-        });
-
-        socket.on('error', (err) => {
-            clearTimeout(timeout);
-            resolve({ code: 0, connected: false, message: err.message });
-        });
-
-        socket.on('close', () => {
-            clearTimeout(timeout);
-            if (step >= 3) {
-                resolve({ code: resultCode, connected: true, message: resultMessage });
-            } else {
-                resolve({ code: 0, connected: false, message: 'Connection closed prematurely' });
-            }
-        });
-
-        socket.connect(SMTP_PORT, connectHost || mxRecord);
-    });
-}
-
-// Verify MULTIPLE recipients in ONE SMTP session: greeting -> EHLO/HELO ->
-// MAIL FROM -> RCPT TO for each recipient (collecting each reply) -> QUIT.
+// Verify MULTIPLE recipients over ONE TCP connection, but each recipient in its
+// OWN transaction: greeting -> EHLO/HELO -> then for each recipient
+// (MAIL FROM -> RCPT TO -> record the reply -> RSET) -> QUIT.
 //
-// Why this matters: opening a fresh connection per recipient (real address, then
-// separate catch-all probes) makes mail servers rate-limit/greylist the extra
-// connections, so probes came back 4xx and catch-all could never be confirmed.
-// Once MAIL FROM + the first RCPT succeed, later RCPTs in the SAME session get
-// real answers, so a catch-all domain reliably accepts the random probe here.
+// Why a transaction per recipient (RSET between them) instead of one MAIL FROM
+// with back-to-back RCPTs: many mail servers accept the FIRST RCPT in a
+// transaction and then defer (4xx) or silently drop every RCPT after it, to stop
+// address enumeration. Cramming the real address + the random catch-all probes
+// into a single transaction therefore lost the probes (and often the connection)
+// after the first RCPT, so catch-all could never be confirmed and the result
+// collapsed to "unknown". Issuing RSET + a fresh MAIL FROM before each RCPT makes
+// every probe its own clean transaction — the natural, well-supported shape — so
+// each recipient gets a real answer while still paying for only one connection
+// (which is what avoids the per-connection rate-limiting).
 //
 // Returns { connected, results } where results[i] = { code, message, connected }
-// aligned to recipients[i]. `connected` (session-level) is true once MAIL FROM
-// was accepted (the RCPT phase actually ran).
+// aligned to recipients[i]. `connected` (session-level) is true once the first
+// MAIL FROM was accepted (the RCPT phase actually ran). `connectHost`, when
+// provided, is the pre-validated public IP to dial (the caller resolves the MX
+// hostname once and passes the vetted IP here, so this function never triggers a
+// second, unchecked DNS lookup — that would reopen a DNS-rebinding SSRF).
 async function checkSMTPMulti(mxRecord, recipients, connectHost = null) {
     await delay(100 + Math.random() * 200);
 
     return new Promise((resolve) => {
         const socket = new net.Socket();
-        let step = 0, heloTried = false, buffer = '', ri = 0, sessionOk = false, settled = false;
+        let buffer = '', pending = null, sessionOk = false, settled = false;
         const results = recipients.map(() => ({ code: 0, message: '', connected: false }));
 
         const finish = (extra) => {
             if (settled) return;
             settled = true;
             clearTimeout(timeout);
+            try { socket.write('QUIT\r\n'); } catch { /* socket already gone */ }
             try { socket.destroy(); } catch { /* already closed */ }
             resolve({ connected: sessionOk, results, ...(extra || {}) });
         };
         const timeout = setTimeout(() => finish({ message: 'Connection timeout' }), TIMEOUT_MS);
-        const send = (cmd) => socket.write(cmd + '\r\n');
+        // Register the callback for the NEXT complete reply, then write the command.
+        const expect = (fn) => { pending = fn; };
+        const send = (cmd, fn) => { expect(fn); socket.write(cmd + '\r\n'); };
 
-        const handleReply = (code, line) => {
-            switch (step) {
-                case 0: // greeting
-                    if (code === 220) { step = 1; send(`EHLO ${HELO_DOMAIN}`); }
-                    else finish({ message: 'Unexpected greeting' });
-                    break;
-                case 1: // EHLO (HELO fallback once)
-                    if (code === 250) { step = 2; send(`MAIL FROM:<${MAIL_FROM}>`); }
-                    else if (!heloTried) { heloTried = true; send(`HELO ${HELO_DOMAIN}`); }
-                    else finish({ message: 'EHLO/HELO rejected' });
-                    break;
-                case 2: // MAIL FROM
-                    if (code === 250) { sessionOk = true; step = 3; send(`RCPT TO:<${recipients[ri]}>`); }
-                    else finish({ message: 'MAIL FROM rejected' });
-                    break;
-                case 3: // one RCPT reply per recipient
-                    results[ri] = { code, message: line.trim(), connected: true };
-                    ri++;
-                    if (ri < recipients.length) send(`RCPT TO:<${recipients[ri]}>`);
-                    else { step = 4; send('QUIT'); }
-                    break;
-                case 4: // QUIT
-                    finish();
-                    break;
-            }
+        // One clean transaction for recipients[i]: MAIL FROM -> RCPT TO -> RSET.
+        const probeRecipient = (i) => {
+            send(`MAIL FROM:<${MAIL_FROM}>`, (mfCode) => {
+                if (mfCode !== 250) return finish({ message: 'MAIL FROM rejected' });
+                sessionOk = true;
+                send(`RCPT TO:<${recipients[i]}>`, (code, line) => {
+                    results[i] = { code, message: line.trim(), connected: true };
+                    const next = i + 1;
+                    if (next < recipients.length) send('RSET', () => probeRecipient(next));
+                    else finish();
+                });
+            });
+        };
+
+        const startSession = () => {
+            send(`EHLO ${HELO_DOMAIN}`, (ehloCode) => {
+                if (ehloCode === 250) return probeRecipient(0);
+                // Some servers only speak HELO; 252 = "cannot VRFY but will accept".
+                send(`HELO ${HELO_DOMAIN}`, (heloCode) => {
+                    if (heloCode !== 250 && heloCode !== 252) return finish({ message: 'EHLO/HELO rejected' });
+                    probeRecipient(0);
+                });
+            });
         };
 
         socket.on('data', (data) => {
             buffer += data.toString();
+            // An SMTP reply may span multiple lines / TCP chunks. "NNN-..." is a
+            // continuation; "NNN ..." (space at index 3) is the final line.
             let nl;
             while ((nl = buffer.indexOf('\n')) !== -1) {
                 const line = buffer.slice(0, nl).replace(/\r$/, '');
@@ -197,13 +99,20 @@ async function checkSMTPMulti(mxRecord, recipients, connectHost = null) {
                 const code = parseInt(line.substring(0, 3), 10);
                 if (Number.isNaN(code)) continue;
                 if (line.charAt(3) === '-') continue;   // continuation line
-                handleReply(code, line);
+                const cb = pending; pending = null;
+                if (cb) cb(code, line);
             }
         });
         socket.on('error', (err) => finish({ message: err.message }));
         socket.on('close', () => finish());
         socket.connect(SMTP_PORT, connectHost || mxRecord);
+
+        // First reply expected is the 220 greeting.
+        expect((code) => {
+            if (code !== 220) return finish({ message: 'Unexpected greeting' });
+            startSession();
+        });
     });
 }
 
-module.exports = { checkSMTP, checkSMTPMulti };
+module.exports = { checkSMTPMulti };
