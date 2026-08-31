@@ -564,6 +564,13 @@ app.post('/auth/2fa/totp/setup', authenticateToken, async (req, res) => {
     try {
         const user = await store.getUserById(req.user.id);
         if (!user) return res.status(404).json({ error: 'User not found' });
+        // Never allow setup while 2FA is already ON: overwriting the secret with
+        // totpEnabled=false would silently disable 2FA using only a session
+        // token. Disabling requires a valid code via /disable first.
+        const existing = await store.getTwoFactor(req.user.id);
+        if (existing && existing.totpEnabled) {
+            return res.status(400).json({ error: '2FA is already enabled. Disable it first to re-enrol.' });
+        }
         const secret = totp.generateSecret();
         // Store as pending - totpEnabled stays false until /enable succeeds.
         await store.setTwoFactor(req.user.id, { totpSecret: secret, totpEnabled: false });
@@ -673,7 +680,7 @@ const chargeableCount = (results) => results.reduce((n, r) => n + (r && isCharge
 const VERIFY_CONCURRENCY = Math.max(1, parseInt(process.env.VERIFY_CONCURRENCY, 10) || 10);
 
 app.post('/verify', authenticateToken, async (req, res) => {
-    const { email } = req.body;
+    const email = typeof req.body.email === 'string' ? req.body.email.trim() : '';
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
     try {
@@ -999,7 +1006,7 @@ app.post('/bounce/csv', authenticateToken, upload.single('file'), async (req, re
 // domains come back as 'not_catch_all' (not charged). Same credit rules as
 // standard verification: only conclusive results are billed.
 app.post('/catchall', authenticateToken, async (req, res) => {
-    const { email } = req.body;
+    const email = typeof req.body.email === 'string' ? req.body.email.trim() : '';
     if (!email) return res.status(400).json({ error: 'Email is required' });
     try {
         const user = await store.getUserById(req.user.id);

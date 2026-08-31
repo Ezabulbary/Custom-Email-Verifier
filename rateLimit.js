@@ -34,7 +34,10 @@ function clientIp(req) {
  */
 function rateLimit({ windowMs, max, name = 'rl', keyGenerator, message } = {}) {
     return (req, res, next) => {
-        const id = keyGenerator ? keyGenerator(req) : clientIp(req);
+        // A keyGenerator may return a falsy value (e.g. the API key header is
+        // absent) - fall back to the client IP so keyless requests don't all
+        // share one 'undefined' bucket.
+        const id = (keyGenerator && keyGenerator(req)) || clientIp(req);
         const key = `${name}:${id}`;
         const now = Date.now();
         let b = buckets.get(key);

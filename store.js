@@ -316,16 +316,20 @@ function firestoreStore() {
             const ref = users.doc(String(id));
             const snap = await ref.get();
             if (!snap.exists) return 0;
-            // Delete the user's batches, then the user document.
-            const batches = await ref.collection('batches').get();
-            const chunks = [];
-            let batch = fs.batch(); let n = 0;
-            for (const d of batches.docs) {
-                batch.delete(d.ref); n++;
-                if (n === 400) { chunks.push(batch.commit()); batch = fs.batch(); n = 0; }
+            // Delete the user's subcollections, then the user document. In
+            // Firestore, subcollection docs are NOT deleted with their parent -
+            // skipping this would leave orphaned batches/ledger data behind.
+            for (const sub of ['batches', 'credit_log']) {
+                const docs = await ref.collection(sub).get();
+                const chunks = [];
+                let batch = fs.batch(); let n = 0;
+                for (const d of docs.docs) {
+                    batch.delete(d.ref); n++;
+                    if (n === 400) { chunks.push(batch.commit()); batch = fs.batch(); n = 0; }
+                }
+                if (n > 0) chunks.push(batch.commit());
+                await Promise.all(chunks);
             }
-            chunks.push(batch.commit());
-            await Promise.all(chunks);
             await ref.delete();
             return 1;
         },

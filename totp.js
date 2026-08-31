@@ -48,15 +48,19 @@ function current(secretB32) {
 }
 
 // Verify a user-entered code, tolerating ±`window` time-steps for clock drift.
+// Codes are compared in constant time so response timing can't leak how many
+// leading digits of a guess were correct.
 function verify(secretB32, token, window = 1) {
     if (!secretB32 || token == null) return false;
     const t = String(token).replace(/\D/g, '');
     if (t.length !== 6) return false;
+    const given = Buffer.from(t);
     const counter = Math.floor(Date.now() / 30000);
+    let ok = false;
     for (let i = -window; i <= window; i++) {
-        if (hotp(secretB32, counter + i) === t) return true;
+        if (crypto.timingSafeEqual(Buffer.from(hotp(secretB32, counter + i)), given)) ok = true;
     }
-    return false;
+    return ok;
 }
 
 // otpauth:// URL that authenticator apps scan (as a QR) or import.
